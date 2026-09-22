@@ -1,6 +1,7 @@
 import Foundation
 
 struct AppSnapshot: Codable {
+    var patches: PatchesSnapshot? = nil
     var progress: [String: SavedProgress] = [:]
     var records: [PlayStatistics] = []
 }

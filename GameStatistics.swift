@@ -8,6 +8,7 @@ struct GameStatistics {
         let record: PlayStatistics
         let intended: Difficulty?
         let experienced: Difficulty?
+        let isBackfilled: Bool
         var isRated: Bool { intended != nil && experienced != nil }
         var matched: Bool { isRated && intended == experienced }
         var hasValidTelemetry: Bool { AdaptiveDifficulty.effort(record) != nil }
@@ -32,20 +33,36 @@ struct GameStatistics {
     init(records: [PlayStatistics], period: StatisticsPeriod = .allTime, now: Date = Date()) {
         self.period = period
         var seen = Set<UUID>()
-        let unique = records.reversed().filter { seen.insert($0.id).inserted }.reversed()
+        let unique = Array(records.reversed().filter { seen.insert($0.id).inserted }.reversed())
+        // Replay only preceding records; a solve cannot change its own boundaries.
+        let chronological = unique.sorted {
+            let a = $0.endedAt ?? $0.startedAt ?? $0.createdAt
+            let b = $1.endedAt ?? $1.startedAt ?? $1.createdAt
+            return a == b ? $0.id.uuidString < $1.id.uuidString : a < b
+        }
+        var history: [PlayStatistics] = []
+        var backfilled: [UUID: Difficulty] = [:]
+        for record in chronological {
+            if record.experiencedDifficulty == nil, AdaptiveDifficulty.effort(record) != nil {
+                backfilled[record.id] = AdaptiveDifficulty(records: history).experiencedDifficulty(for: record)
+            }
+            history.append(record)
+        }
         let cutoff = now.addingTimeInterval(-30*24*60*60)
         let scoped = unique.filter {
             let date = $0.endedAt ?? $0.startedAt ?? $0.createdAt
             return period == .allTime || (date >= cutoff && date <= now)
         }
         games = scoped.filter { $0.outcome == "solved" }.map {
-            Game(record: $0, intended: Self.difficulty($0.difficulty), experienced: Self.difficulty($0.experiencedDifficulty))
+            Game(record: $0, intended: Self.difficulty($0.difficulty), experienced: Self.difficulty($0.experiencedDifficulty) ?? backfilled[$0.id], isBackfilled: backfilled[$0.id] != nil)
         }.sorted { $0.date == $1.date ? $0.record.id.uuidString < $1.record.id.uuidString : $0.date < $1.date }
         skippedCount = scoped.filter { $0.outcome == "skipped" }.count
         model = AdaptiveDifficulty(records: Array(unique))
         training = Array(unique.filter { AdaptiveDifficulty.effort($0) != nil }.suffix(200))
         features = Self.featureInsights(model: model, records: training)
     }
+    var backfilledCount: Int { games.filter { $0.isBackfilled }.count }
+    var timedCount: Int { games.filter { $0.hasValidTelemetry }.count }
     var rated: [Game] { games.filter { $0.isRated } }
     var matchedCount: Int { rated.filter { $0.matched }.count }
     var unratedCount: Int { games.count-rated.count }

@@ -28,28 +28,47 @@ The prior fades into the fitted prediction over the first eight valid solves.
 Recent evidence has a half-life of 60 valid games; at most 200 valid games are used.
 Skipped games, incomplete telemetry, invalid numeric data, and duplicate record IDs
 do not become training examples. Stored summary values are recalculated from raw
-telemetry before fitting. Compatible stored puzzle features are reused.
+telemetry before fitting. Compatible stored puzzle features are reused. Historical records remain readable.
 
-## Choosing boards
+## Outcome probabilities and choosing boards
 
-Generate 18 unique-solution candidates across all three grid sizes using three
-workers. Score the candidates once and sort them. Easy uses the lowest third,
-Medium the middle third, and Hard the highest third. Within each band, choose the
-candidate nearest the player's recent effort target (15th/50th/85th percentile).
-Targets gradually become personal over 20 valid games. Previously played solution
-paths in the existing exclusion list are filtered out.
+Classifier version 3 retains the effort regression and adds a conditional outcome
+forecast. It estimates Easy/Medium/Hard probabilities by comparing predicted effort
+plus historical leave-one-out regression residuals with the pre-play assessment
+boundaries. Similar puzzle structures receive more weight; the same recency and
+assistance weights used for fitting also apply to these residuals. Smoothing scales
+with the player's target spacing. A broad weak prior prevents sparse or unfamiliar
+structures from receiving unwarranted certainty. These are model estimates; their
+calibration must be evaluated on future games.
 
-The bands separate predictions within a candidate batch. They cannot guarantee
-actual difficulty across independently generated batches. Players differ, features
-omit some relevant puzzle properties, and all available candidates may be easy for
-an experienced player. Learned predictions should improve with representative play;
-perfect difficulty classification requires evidence from real play and is not
-promised. Skips are deliberately not interpreted as difficulty: a skip alone does
-not reveal whether a board was too easy, too hard, or interrupted.
+Generate the original 18 candidates across all three grid sizes. Select across the
+whole pool by outcome probability, rather than constraining each button to one
+third. Easy prioritizes its Easy probability and penalizes Hard surprises three
+fold. A candidate qualifies for Easy at estimated P(Easy) >= 85% and P(Hard) <= 5%.
+Medium and Hard use 70% for their requested outcome. Qualifying candidates outrank
+nonqualifying candidates, then expected utility decides among them.
+
+When the initial pool does not qualify, generate up to three additional batches of
+six candidates. For Easy these are 5×5 boards with maximum checkpoint gaps of 4,
+3, then 2, and respectively 25%, 50%, then 75% of remaining off-solution edges
+blocked. Added clues retain existing checkpoints in order. Both changes only add
+constraints, preserving the base puzzle's unique solution. Generator version is 4.
+Medium and Hard expand with additional boards of their respective generator preset.
+Previously played paths remain excluded.
+
+The search is bounded at 36 candidates in normal operation. If no candidate
+qualifies, return the candidate with the best utility; do not claim that its target
+was met. New structures require real play before their probabilities can be
+validated. Every completed, valid game updates subsequent fits automatically.
+
+Each new game stores its predicted outcome probabilities and its pre-play targets.
+The post-solve toast uses those saved targets even after a restart or playing other
+levels. The effort formula is unchanged. Older games without saved targets retain
+the previous fallback assessment behavior. Skipped games remain excluded from fit.
 
 ## Performance
 
-Local optimized-build medians measured during this change:
+Historical optimized-build medians for classifier version 2 (not version 3):
 
 | Operation | Before | After |
 | --- | ---: | ---: |
@@ -65,7 +84,7 @@ compared with the same implementation run serially (~12.1 ms).
 Connectivity features now check four neighbors per cell. Uniqueness searches use
 bitsets without per-node frontier arrays. Each puzzle uses a local random generator
 seeded once from system randomness, avoiding thousands of system-random calls and
-permitting deterministic tests. Generator version is 3; classifier version is 2.
+permitting deterministic tests. Those measurements used generator version 3 and classifier version 2.
 
 ## Validation
 
@@ -94,3 +113,15 @@ not determine this verdict. It is saved with the completed record. Incomplete or
 invalid telemetry receives an honest “Still learning” message instead of a guessed
 rating. The toast does not block proceeding, respects Reduce Motion, and announces
 its message to assistive technology.
+
+## Version 3 validation
+
+New regression coverage checks probability normalization, uncertainty with no data,
+reliable versus mixed outcomes, recent skill changes, forecast persistence, frozen
+pre-play assessment boundaries, and guided-board uniqueness using the independent
+reference solver. Synthetic success is not evidence of a real-player match rate.
+
+A chronological replay of the available 83 valid solves, with the first 20 used
+as initial history, provides an offline prediction check. It cannot establish the
+match rate of newly generated guided boards: those boards have not yet been played.
+The 85% Easy and 5% Hard thresholds are selection targets, not measured achievements.

@@ -43,6 +43,26 @@ struct Puzzle: Codable {
     let clues: [Cell: Int]
     let walls: Set<Edge>
 
+    // Add information and remove alternative moves without changing the solution.
+    // A unique base puzzle stays unique because these only add constraints.
+    func guided(maxGap: Int, blockedFraction: Double) -> Puzzle {
+        precondition(maxGap > 0 && blockedFraction >= 0 && blockedFraction <= 1)
+        var indices = Set(solution.indices.filter { clues[solution[$0]] != nil })
+        for index in stride(from: 0, to: solution.count, by: maxGap) { indices.insert(index) }
+        indices.insert(solution.count-1)
+        let checkpoints = Dictionary(uniqueKeysWithValues: indices.sorted().enumerated().map { (solution[$0.element], $0.offset+1) })
+        let pathEdges = Set(zip(solution, solution.dropFirst()).map { Edge($0, $1) })
+        var alternatives: [Edge] = []
+        for cell in solution {
+            for next in [Cell(x: cell.x+1, y: cell.y), Cell(x: cell.x, y: cell.y+1)] where next.x < size && next.y < size {
+                let edge = Edge(cell, next)
+                if !pathEdges.contains(edge) && !walls.contains(edge) { alternatives.append(edge) }
+            }
+        }
+        let additional = alternatives.prefix(Int(ceil(Double(alternatives.count)*blockedFraction)))
+        return Puzzle(size: size, solution: solution, clues: checkpoints, walls: walls.union(additional))
+    }
+
     func hintPrefix(for path: [Cell]) -> [Cell] {
         let correctCount = zip(path, solution).prefix { $0 == $1 }.count
         return Array(solution.prefix(max(1, correctCount)))
@@ -508,6 +528,8 @@ struct DifficultyMeasurements: Codable {
 struct PlayStatistics: Codable {
     var experiencedDifficulty: String?
     var predictedEffort: Double?
+    var predictedDifficultyProbabilities: [Double]?
+    var difficultyTargets: [Double]?
     var classificationModelVersion: Int?
     var classificationSamples: Int?
     var measurements: DifficultyMeasurements?
@@ -527,7 +549,7 @@ struct PlayStatistics: Codable {
 
     init(puzzle: Puzzle, difficulty: Difficulty) {
         measurements = DifficultyMeasurements()
-        generatorVersion = 3
+        generatorVersion = 4
         self.puzzle = puzzle; self.difficulty = difficulty.title
         features = Self.extractFeatures(puzzle)
     }
@@ -594,6 +616,11 @@ struct SavedProgress: Codable {
 }
 
 final class GameController: NSObject, NSApplicationDelegate {
+    private var home: GamesHome!
+    private var zipContent: NSView!
+    private var patchesContent: NSView?
+    private var activeGame = "home"
+    private var patchesController: PatchesController?
     private var window: NSWindow!
     private let board = BoardView()
     private let title = NSTextField(labelWithString: "Zip")
@@ -607,7 +634,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     private let difficultyToast = DifficultyToast()
     private var playControls: [NSView] = []
     private let hintButton = NSButton(title: "Hint · 30s", target: nil, action: nil)
-    private let successButton = NSButton(title: "New puzzle  →", target: nil, action: nil)
+    private let successButton = GameActionButton(title: "New puzzle  →", target: nil, action: nil)
     private let successTitle = NSTextField(labelWithString: "Puzzle complete")
     private let successTime = NSTextField(labelWithString: "")
     private var difficulty: Difficulty = .easy
@@ -626,12 +653,42 @@ final class GameController: NSObject, NSApplicationDelegate {
     private let coverMark = WelcomeMark()
     private let coverTitle = NSTextField(labelWithString: "Ready for a little Zip?")
     private let coverDetail = NSTextField(labelWithString: "One path. Every square.")
-    private let coverButton = NSButton(title: "Play", target: nil, action: nil)
+    private let coverButton = GameActionButton(title: "Play", target: nil, action: nil)
     private var loading = false
     private var restoring = false
     private var generationID = UUID()
     private let loadingLabel = NSTextField(labelWithString: "Creating your puzzle…")
     private let spinner = NSProgressIndicator()
+
+    private func leaveCurrentGame() {
+        if activeGame == "zip" { if !startScreen && !paused && !progress.completed { pauseGame() }; saveProgress() }
+        if activeGame == "patches" { patchesController?.leave() }
+    }
+    private func present(_ view:NSView, name:String) {
+        window.delegate = nil
+        let size = NSSize(width:660,height:name == "patches" ? 860 : 820)
+        window.contentView = view
+        window.setContentSize(size)
+        window.title = name == "home" ? "LinkedInGames" : "LinkedInGames · \(name.capitalized)"
+        activeGame = name
+        window.makeKeyAndOrderFront(nil)
+    }
+    @objc private func showHome() {
+        leaveCurrentGame(); present(home,name:"home")
+    }
+    @objc private func showZip() {
+        leaveCurrentGame(); present(zipContent,name:"zip")
+    }
+    @objc private func showPatches() {
+        leaveCurrentGame()
+        if patchesController == nil {
+            let controller = PatchesController(store:store)
+            patchesController = controller; patchesContent = controller.gameContent
+            controller.onHome = { [weak self] in self?.showHome() }
+        }
+        present(patchesContent!,name:"patches")
+        patchesController?.attach(to:window)
+    }
 
     private func installApplicationMenu() {
         let mainMenu = NSMenu()
@@ -639,10 +696,17 @@ final class GameController: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
 
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Zip", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About LinkedInGames", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
+        let homeItem = NSMenuItem(title:"Games",action:#selector(showHome),keyEquivalent:"0")
+        homeItem.target = self; appMenu.addItem(homeItem)
+        let zipItem = NSMenuItem(title:"Play Zip",action:#selector(showZip),keyEquivalent:"1")
+        zipItem.target = self; appMenu.addItem(zipItem)
+        let patchesItem = NSMenuItem(title: "Play Patches", action: #selector(showPatches), keyEquivalent: "2")
+        patchesItem.target = self
+        appMenu.addItem(patchesItem)
 
-        let quitItem = NSMenuItem(title: "Quit Zip", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit LinkedInGames", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         appMenu.addItem(quitItem)
         appMenuItem.submenu = appMenu
@@ -715,7 +779,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             showSuccessPanel()
         }
     }
-    func applicationWillTerminate(_ notification: Notification) { saveProgress(); store?.flush() }
+    func applicationWillTerminate(_ notification: Notification) { patchesController?.flush(); saveProgress(); store?.flush() }
     func applicationDidResignActive(_ notification: Notification) {
         if !startScreen && !loading && !progress.completed && startedAt != nil { pauseGame() }
         activeGap = 0; lastStatisticsTick = Date(); saveProgress()
@@ -732,7 +796,9 @@ final class GameController: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         do {
             let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            store = try ProgressStore(url: folder.appendingPathComponent("Zip/progress.json"))
+            let preview = CommandLine.arguments.contains("--preview-patches") || CommandLine.arguments.contains("--smoke-games")
+            let saveURL = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("patches-preview-" + UUID().uuidString).appendingPathComponent("progress.json") : folder.appendingPathComponent("Zip/progress.json")
+            store = try ProgressStore(url: saveURL)
         } catch {
             let alert = NSAlert(); alert.messageText = "Saved progress could not be read"
             alert.informativeText = "Your files have been left untouched. \(error.localizedDescription)"
@@ -743,8 +809,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             alert.informativeText = error.localizedDescription; alert.runModal()
         }
         NSApp.appearance = NSAppearance(named: .aqua)
-        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-           let icon = NSImage(contentsOf: url) { NSApp.applicationIconImage = icon }
+        NSApp.applicationIconImage = gamesIcon()
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 660, height: 820))
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor(calibratedWhite: 0.965, alpha: 1).cgColor
@@ -759,6 +824,9 @@ final class GameController: NSObject, NSApplicationDelegate {
         window.center(); window.contentView = content
         window.isReleasedWhenClosed = false
 
+        let patchesButton = NSButton(title: "‹ Games", target: self, action: #selector(showHome))
+        patchesButton.frame = NSRect(x: 149, y: 778, width: 105, height: 30)
+        patchesButton.bezelStyle = .rounded
         title.font = .systemFont(ofSize: 22, weight: .bold)
         title.textColor = NSColor(calibratedWhite: 0.10, alpha: 1)
         subtitle.font = .systemFont(ofSize: 14)
@@ -840,11 +908,16 @@ final class GameController: NSObject, NSApplicationDelegate {
             content.addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
+        content.addSubview(patchesButton)
         content.addSubview(successPanel); successPanel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(difficultyToast); difficultyToast.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statisticsScreen); statisticsScreen.translatesAutoresizingMaskIntoConstraints = false
         statisticsScreen.isHidden = true
-        statisticsScreen.onClose = { [weak self] in self?.window.makeFirstResponder(self?.board) }
+        statisticsScreen.onClose = { [weak self] in
+            self?.difficultyControl.isHidden = false
+            self?.statisticsButton.isHidden = false
+            self?.window.makeFirstResponder(self?.board)
+        }
         NSLayoutConstraint.activate([
             statisticsScreen.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             statisticsScreen.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -932,15 +1005,37 @@ final class GameController: NSObject, NSApplicationDelegate {
             coverButton.centerXAnchor.constraint(equalTo: cover.centerXAnchor), coverButton.topAnchor.constraint(equalTo: coverDetail.bottomAnchor, constant: 28),
             coverButton.widthAnchor.constraint(equalToConstant: 160), coverButton.heightAnchor.constraint(equalToConstant: 42)
         ])
+        zipContent = content
+        home = GamesHome(frame:NSRect(x:0,y:0,width:660,height:820))
+        home.onZip = { [weak self] in self?.showZip() }
+        home.onPatches = { [weak self] in self?.showPatches() }
         showStartScreen()
+        showHome()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if CommandLine.arguments.contains("--preview-patches") { showPatches() }
+        if CommandLine.arguments.contains("--smoke-games") {
+            precondition(window.contentView === home)
+            showPatches()
+            precondition(window.contentView === patchesContent && activeGame == "patches")
+            precondition(window.contentView!.bounds.height == 860)
+            showHome()
+            precondition(window.contentView === home && window.contentView!.bounds.height == 820)
+            showZip()
+            precondition(window.contentView === zipContent && activeGame == "zip")
+            showPatches(); showHome()
+            precondition(NSApp.windows.filter { $0.isVisible }.count == 1)
+            try! "Single-window library → Patches → library → Zip → Patches → library passed.\n".write(toFile:CommandLine.arguments.last!,atomically:true,encoding:.utf8)
+            NSApp.terminate(nil)
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     @objc private func showStatistics() {
         guard !loading else { return }
         if !startScreen && !paused && !progress.completed && startedAt != nil { pauseGame() }
         difficultyToast.dismiss()
+        difficultyControl.isHidden = true
+        statisticsButton.isHidden = true
         statisticsScreen.show(records: store.snapshot.records)
         window.makeFirstResponder(statisticsScreen)
     }
@@ -986,6 +1081,8 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.activeGap = 0
                 self.progress.statistics = PlayStatistics(puzzle: generated, difficulty: selected)
                 self.progress.statistics?.predictedEffort = model.predict(generated)
+                self.progress.statistics?.predictedDifficultyProbabilities = model.forecast(generated).probabilities
+                self.progress.statistics?.difficultyTargets = model.targets
                 self.progress.statistics?.classificationModelVersion = AdaptiveDifficulty.version
                 self.progress.statistics?.classificationSamples = model.sampleCount
                 self.progress.path = []; self.progress.elapsed = 0
@@ -1110,7 +1207,34 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
 }
 
-if CommandLine.arguments.contains("--self-test") {
+if CommandLine.arguments.contains("--render-games") {
+    _ = NSApplication.shared
+    NSApp.appearance = NSAppearance(named:.aqua)
+    let output = URL(fileURLWithPath:CommandLine.arguments.last!,isDirectory:true)
+    try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+    let home = GamesHome(frame:NSRect(x:0,y:0,width:660,height:820))
+    let host = NSWindow(contentRect:home.bounds,styleMask:[.titled],backing:.buffered,defer:false)
+    host.contentView = home
+    let primary = home.subviews.flatMap { $0.subviews }.compactMap { $0 as? GameActionButton }.first!
+    precondition(primary.focusRingType == .none)
+    precondition(host.makeFirstResponder(primary))
+    let bitmap = home.bitmapImageRepForCachingDisplay(in:home.bounds)!
+    home.cacheDisplay(in:home.bounds,to:bitmap)
+    try bitmap.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent("games-home.png"))
+    let store = try ProgressStore(url:output.appendingPathComponent("preview-progress.json"))
+    let controller = PatchesController(store:store)
+    try controller.renderPreview(to:output.appendingPathComponent("patches-welcome.png"),welcomeOnly:true)
+    let icon = NSBitmapImageRep(data:gamesIcon().tiffRepresentation!)!
+    try icon.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent("games-icon.png"))
+} else if CommandLine.arguments.contains("--render-patches") {
+    _ = NSApplication.shared
+    NSApp.appearance = NSAppearance(named: .aqua)
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("patches-render-" + UUID().uuidString)
+    let store = try ProgressStore(url: folder.appendingPathComponent("progress.json"))
+    let controller = PatchesController(store: store)
+    try controller.renderPreview(to: URL(fileURLWithPath: CommandLine.arguments.last!))
+} else if CommandLine.arguments.contains("--self-test") {
+    runPatchesTests()
     runAdaptiveRegressionTests()
     precondition(HintPolicy.wait(active: 0, next: nil) == 30)
     precondition(HintPolicy.wait(active: 29.5, next: nil) == 1)
@@ -1156,7 +1280,7 @@ if CommandLine.arguments.contains("--self-test") {
             precondition(restored.statistics?.actions["reset"] == 2)
             precondition(restored.statistics?.actions["hint"] == 1 && restored.statistics?.nextHintAt == 65)
             precondition(restored.statistics?.features["cells"] == p.size * p.size)
-            precondition(restored.statistics?.generatorVersion == 3)
+            precondition(restored.statistics?.generatorVersion == 4)
             precondition(restored.statistics?.measurements?.assisted == true)
             precondition(restored.statistics?.measurements?.pauseSeconds == 7)
         }
