@@ -938,7 +938,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             self.showSuccessPanel()
             self.difficultyToast.show(verdict: self.progress.statistics?.experiencedDifficulty, accent: self.board.accentColor)
         }
-        for v in [windowDragArea, title, subtitle, timerLabel, progressLabel, difficultyControl, board, reset, new, undo, hintButton, loadingLabel, spinner] {
+        for v in [windowDragArea, title, subtitle, timerLabel, progressLabel, difficultyControl, statisticsButton, board, reset, new, undo, hintButton, loadingLabel, spinner] {
             content.addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
