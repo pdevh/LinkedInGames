@@ -1,5 +1,56 @@
 import AppKit
 
+private enum PatchArtwork {
+    static func badge(for shape: PatchShape, in cell: NSRect) -> NSRect {
+        let side = min(cell.width, cell.height)
+        let width: CGFloat
+        let height: CGFloat
+        switch shape {
+        case .square, .any: width = side * 0.53; height = side * 0.53
+        case .tall: width = side * 0.39; height = side * 0.65
+        case .wide: width = side * 0.65; height = side * 0.39
+        }
+        return NSRect(x: cell.midX-width/2, y: cell.midY-height/2,
+                      width: width, height: height)
+    }
+
+    static func draw(_ badge: NSRect, shape: PatchShape, color: NSColor, numbered: Bool) {
+        let path = NSBezierPath(roundedRect: badge, xRadius: min(8, badge.width * 0.16),
+                                yRadius: min(8, badge.height * 0.16))
+        color.withAlphaComponent(numbered ? 0.95 : 0.53).setFill()
+        path.fill()
+        if shape == .any {
+            color.withAlphaComponent(0.9).setStroke()
+            path.lineWidth = 1.6
+            path.setLineDash([3, 2], count: 2, phase: 0)
+            path.stroke()
+        }
+    }
+}
+
+private final class PatchLegendView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        let heading = NSAttributedString(string: "Complete each shape to fill the grid", attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: NSColor(calibratedWhite: 0.20, alpha: 1)
+        ])
+        heading.draw(at: NSPoint(x: 0, y: 43))
+        let entries: [(PatchShape, String, CGFloat, CGFloat)] = [
+            (.square, "Square", 0, 23), (.tall, "Tall rectangle", 270, 23),
+            (.wide, "Wide rectangle", 0, 1), (.any, "Any rectangle", 270, 1)
+        ]
+        for (shape, title, x, y) in entries {
+            let cell = NSRect(x: x, y: y, width: 19, height: 19)
+            PatchArtwork.draw(PatchArtwork.badge(for: shape, in: cell),
+                              shape: shape, color: .systemGray, numbered: false)
+            NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor(calibratedWhite: 0.27, alpha: 1)
+            ]).draw(at: NSPoint(x: x+25, y: y+1))
+        }
+    }
+}
+
 final class PatchesBoardView: NSView {
     var puzzle: PatchesPuzzle? { didSet { anchor = nil; cursor = Cell(x:0,y:0); needsDisplay = true } }
     var placed: [PatchRect] = [] { didSet { needsDisplay = true } }
@@ -55,8 +106,9 @@ final class PatchesBoardView: NSView {
             let label = NSAttributedString(string:"Your puzzle is waiting",attributes:[.font:NSFont.systemFont(ofSize:20,weight:.medium),.foregroundColor:NSColor.secondaryLabelColor])
             label.draw(at:NSPoint(x:bounds.midX-label.size().width/2,y:bounds.midY-12)); return
         }
-        NSColor(calibratedWhite:0.88,alpha:1).setStroke()
+        NSColor(calibratedWhite:0.82,alpha:1).setStroke()
         let lines = NSBezierPath(); lines.lineWidth = 0.7
+        lines.setLineDash([3, 3], count: 2, phase: 0)
         for i in 0...puzzle.size {
             let offset = CGFloat(i)*unit
             lines.move(to:NSPoint(x:grid.minX+offset,y:grid.minY)); lines.line(to:NSPoint(x:grid.minX+offset,y:grid.maxY))
@@ -77,12 +129,15 @@ final class PatchesBoardView: NSView {
         }
         for (i,clue) in puzzle.clues.enumerated() {
             let box = rect(PatchRect(x:clue.cell.x,y:clue.cell.y,width:1,height:1))
-            let tall = clue.shape == .tall, wide = clue.shape == .wide
-            let badge = NSRect(x:box.midX-(tall ? 18 : wide ? 30 : 25),y:box.midY-(wide ? 19 : tall ? 30 : 25),width:tall ? 36 : wide ? 60 : 50,height:wide ? 38 : tall ? 60 : 50)
-            color(i).withAlphaComponent(0.92).setFill(); NSBezierPath(roundedRect:badge,xRadius:8,yRadius:8).fill()
-            let value = (clue.area.map(String.init) ?? "·") + (clue.shape == .any ? " ◇" : "")
-            let label = NSAttributedString(string:value,attributes:[.font:NSFont.systemFont(ofSize:clue.shape == .any ? 18 : 23,weight:.bold),.foregroundColor:NSColor.white])
-            label.draw(at:NSPoint(x:box.midX-label.size().width/2,y:box.midY-label.size().height/2))
+            let badge = PatchArtwork.badge(for: clue.shape, in: box)
+            PatchArtwork.draw(badge, shape: clue.shape, color: color(i), numbered: clue.area != nil)
+            if let area = clue.area {
+                let label = NSAttributedString(string:String(area),attributes:[
+                    .font:NSFont.monospacedDigitSystemFont(ofSize:min(25, badge.height*0.52),weight:.bold),
+                    .foregroundColor:NSColor.white
+                ])
+                label.draw(at:NSPoint(x:box.midX-label.size().width/2,y:box.midY-label.size().height/2))
+            }
         }
         if keyboard && window?.firstResponder === self {
             NSColor.labelColor.setStroke(); let path = NSBezierPath(roundedRect:rect(PatchRect(x:cursor.x,y:cursor.y,width:1,height:1)).insetBy(dx:5,dy:5),xRadius:7,yRadius:7)
@@ -184,6 +239,25 @@ final class PatchesController: NSObject, NSWindowDelegate {
     func leave() { if !paused { tick() }; pause(); isPresented = false }
     @objc private func goHome() { leave(); onHome?() }
     func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
+    func smokePlay(completion: @escaping (Bool) -> Void) {
+        newPuzzle()
+        var attempts = 0
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            attempts += 1
+            guard let self else { timer.invalidate(); completion(false); return }
+            if attempts > 100 { timer.invalidate(); completion(false); return }
+            guard !self.loading, let puzzle = self.session?.record.puzzle else { return }
+            timer.invalidate()
+            if self.paused { self.togglePlay() }
+            guard !self.paused else { completion(false); return }
+            self.place(puzzle.solution[0])
+            guard self.session?.placed.count == 1 else { completion(false); return }
+            self.undoMove()
+            guard self.session?.placed.isEmpty == true else { completion(false); return }
+            for rectangle in puzzle.solution { self.place(rectangle) }
+            completion(self.session?.record.solved == true && self.session?.placed.count == puzzle.solution.count)
+        }
+    }
     // Offscreen visual QA uses the real view hierarchy and isolated save storage.
     func renderPreview(to url: URL, welcomeOnly: Bool = false) throws {
         var rng = PuzzleRandom(seed: 19)
@@ -215,9 +289,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         picker.frame = NSRect(x:398,y:795,width:226,height:38)
         picker.selected = difficulty.rawValue
         picker.onChange = { [weak self] d in self?.changeDifficulty(Difficulty(rawValue:d) ?? .easy) }
-        let rules = NSTextField(wrappingLabelWithString:"One clue per rectangle. Fill every cell.\n□ Square    ▯ Tall    ▭ Wide    ◇ Any rectangle\nNumbers give area. A dot means any size.")
-        rules.font = .systemFont(ofSize:14); rules.textColor = .secondaryLabelColor
-        rules.frame = NSRect(x:36,y:722,width:588,height:66)
+        let rules = PatchLegendView(frame:NSRect(x:36,y:726,width:588,height:62))
         board.frame = NSRect(x:30,y:122,width:600,height:600)
         status.frame = NSRect(x:36,y:96,width:510,height:22); status.font = .systemFont(ofSize:13,weight:.medium)
         timerLabel.frame = NSRect(x:555,y:96,width:70,height:22); timerLabel.font = .monospacedDigitSystemFont(ofSize:15,weight:.medium); timerLabel.alignment = .right
@@ -294,7 +366,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         else if solved { status.stringValue = "Puzzle complete · \(session?.record.verdict ?? "") for you" }
         else if paused { status.stringValue = session == nil ? "Ready when you are · Press Play" : "Paused · Progress saved" }
         let n = snapshot.records.filter(\.solved).count
-        summary.stringValue = "\(n) solved · \(n < 8 ? "Learning your pace" : "Personalized difficulty") · Drag either direction; click a patch to remove"
+        summary.stringValue = "\(n) solved · \(n < 8 ? "Learning your pace" : "Personalized difficulty") · Number = cells · Unnumbered = choose the size"
     }
     @objc private func togglePlay() {
         guard !loading else { return }

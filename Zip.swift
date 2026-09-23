@@ -728,7 +728,8 @@ final class GameController: NSObject, NSApplicationDelegate {
         guard !loading && !restoring && !startScreen && progress.current != nil else { return }
         progress.path = board.path
         progress.elapsed = startedAt.map { Date().timeIntervalSince($0) } ?? elapsed
-        progress.statistics?.elapsedSeconds = progress.elapsed
+        let savedElapsed = progress.elapsed
+        progress.statistics?.elapsedSeconds = savedElapsed
         progress.statistics?.updateMeasurements()
         store.snapshot.progress[storageKey] = progress
         store.save()
@@ -762,7 +763,8 @@ final class GameController: NSObject, NSApplicationDelegate {
         guard let puzzle = progress.current else { newGame(); return }
         if progress.statistics == nil && !progress.completed {
             progress.statistics = PlayStatistics(puzzle: puzzle, difficulty: difficulty)
-            progress.statistics?.measurements?.collectedFromStart = progress.path.isEmpty && progress.elapsed == 0
+            let collectedFromStart = progress.path.isEmpty && progress.elapsed == 0
+            progress.statistics?.measurements?.collectedFromStart = collectedFromStart
         } else if progress.statistics?.measurements == nil && !progress.completed {
             progress.statistics?.measurements = DifficultyMeasurements()
             progress.statistics?.measurements?.collectedFromStart = false
@@ -796,7 +798,9 @@ final class GameController: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         do {
             let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            let preview = CommandLine.arguments.contains("--preview-patches") || CommandLine.arguments.contains("--smoke-games")
+            let preview = CommandLine.arguments.contains("--preview-patches")
+                || CommandLine.arguments.contains("--smoke-games")
+                || CommandLine.arguments.contains("--smoke-play")
             let saveURL = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("patches-preview-" + UUID().uuidString).appendingPathComponent("progress.json") : folder.appendingPathComponent("Zip/progress.json")
             store = try ProgressStore(url: saveURL)
         } catch {
@@ -1027,6 +1031,36 @@ final class GameController: NSObject, NSApplicationDelegate {
             precondition(NSApp.windows.filter { $0.isVisible }.count == 1)
             try! "Single-window library → Patches → library → Zip → Patches → library passed.\n".write(toFile:CommandLine.arguments.last!,atomically:true,encoding:.utf8)
             NSApp.terminate(nil)
+        }
+        if CommandLine.arguments.contains("--smoke-play") {
+            precondition(store.url.path.hasPrefix(FileManager.default.temporaryDirectory.path),
+                         "Gameplay smoke tests must use isolated temporary progress")
+            showZip()
+            beginOrResume()
+            var attempts = 0
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                attempts += 1
+                guard let self else { timer.invalidate(); return }
+                if attempts > 100 { fatalError("Zip puzzle generation timed out") }
+                guard !self.loading, let puzzle = self.progress.current else { return }
+                timer.invalidate()
+                self.board.path = Array(puzzle.solution.prefix(2))
+                self.board.onAction?("move", 1)
+                self.saveProgress()
+                self.store.flush()
+                let restored = try! ProgressStore(url: self.store.url)
+                precondition(restored.snapshot.progress[self.storageKey]?.path == self.board.path)
+                self.showPatches()
+                self.patchesController!.smokePlay { passed in
+                    precondition(passed, "Patches place, undo, or completion failed")
+                    self.store.flush()
+                    let reloaded = try! ProgressStore(url: self.store.url)
+                    precondition(reloaded.snapshot.patches?.records.contains(where: { $0.solved }) == true)
+                    try! "Zip start → move → save → reopen, Patches start → place → undo → complete → reopen passed.\n"
+                        .write(toFile: CommandLine.arguments.last!, atomically: true, encoding: .utf8)
+                    NSApp.terminate(nil)
+                }
+            }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
