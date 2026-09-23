@@ -673,6 +673,11 @@ final class GameController: NSObject, NSApplicationDelegate {
     private let coverButton = GameActionButton(title: "Play", target: nil, action: nil)
     private var loading = false
     private var restoring = false
+    private let timerOnVisibleKey = "zip.timerStartsOnVisible.v1"
+    private var timerStartsOnVisible: Bool {
+        get { UserDefaults.standard.bool(forKey: timerOnVisibleKey) }
+        set { UserDefaults.standard.set(newValue, forKey: timerOnVisibleKey) }
+    }
     private var generationID = UUID()
     private let loadingLabel = NSTextField(labelWithString: "Creating your puzzle…")
     private let spinner = NSProgressIndicator()
@@ -731,6 +736,11 @@ final class GameController: NSObject, NSApplicationDelegate {
         autoUpdatesItem.target = self
         autoUpdatesItem.state = UpdateService.shared.automaticallyChecksForUpdates ? .on : .off
         appMenu.addItem(autoUpdatesItem)
+        appMenu.addItem(NSMenuItem.separator())
+        let timerItem = NSMenuItem(title: "Start Zip Timer When Puzzle Appears", action: #selector(toggleTimerStart(_:)), keyEquivalent: "")
+        timerItem.target = self
+        timerItem.state = timerStartsOnVisible ? .on : .off
+        appMenu.addItem(timerItem)
 
         let quitItem = NSMenuItem(title: "Quit LinkedInGames", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
@@ -758,6 +768,19 @@ final class GameController: NSObject, NSApplicationDelegate {
         UpdateService.shared.automaticallyChecksForUpdates = enabled
         sender.state = enabled ? .on : .off
         if enabled { UpdateService.shared.checkForUpdatesInBackground() }
+    }
+
+    @objc private func toggleTimerStart(_ sender: NSMenuItem) {
+        timerStartsOnVisible.toggle()
+        sender.state = timerStartsOnVisible ? .on : .off
+        if timerStartsOnVisible && activeGame == "zip" && !startScreen && !paused && !loading && !progress.completed && startedAt == nil {
+            lastInput = Date()
+            startedAt = Date().addingTimeInterval(-elapsed)
+            if progress.statistics?.startedAt == nil { progress.statistics?.startedAt = Date() }
+            tick(); saveProgress()
+        } else if !timerStartsOnVisible && activeGame == "zip" && startedAt != nil {
+            lastInput = Date()
+        }
     }
 
     private var storageKey: String { "zip.progress.v1.\(difficulty.rawValue)" }
@@ -810,7 +833,10 @@ final class GameController: NSObject, NSApplicationDelegate {
         board.puzzle = puzzle
         board.restore(path: progress.path, completed: progress.completed)
         elapsed = progress.elapsed
-        startedAt = !progress.completed && elapsed > 0 ? Date().addingTimeInterval(-elapsed) : nil
+        startedAt = !progress.completed && (elapsed > 0 || timerStartsOnVisible) ? Date().addingTimeInterval(-elapsed) : nil
+        if timerStartsOnVisible && !progress.completed {
+            if progress.statistics?.startedAt == nil { progress.statistics?.startedAt = Date() }
+        }
         restoring = false
         tick(); updateLevel(); hideSuccessPanel()
         if progress.completed {
@@ -1167,7 +1193,12 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.board.puzzle = generated
                 self.elapsed = 0; self.startedAt = nil
                 self.restoring = false
-                self.setLoading(false); self.tick(); self.updateLevel(); self.saveProgress()
+                self.setLoading(false)
+                if self.timerStartsOnVisible {
+                    self.startedAt = Date()
+                    self.progress.statistics?.startedAt = self.startedAt
+                }
+                self.tick(); self.updateLevel(); self.saveProgress()
             }
         }
     }
@@ -1256,7 +1287,10 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
     private func pauseGame() {
         guard !paused && !startScreen && !loading && !progress.completed else { return }
-        if let startedAt { elapsed = min(Date(), lastInput.addingTimeInterval(10)).timeIntervalSince(startedAt) }
+        if let startedAt {
+            let end = timerStartsOnVisible ? Date() : min(Date(), lastInput.addingTimeInterval(10))
+            elapsed = end.timeIntervalSince(startedAt)
+        }
         finishThinkingInterval()
         startedAt = nil; paused = true
         saveProgress(); board.isHidden = true
@@ -1267,7 +1301,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
     private func tick() {
         let now = Date()
-        if !paused && !startScreen && !loading && startedAt != nil && now.timeIntervalSince(lastInput) >= 10 { pauseGame() }
+        if !timerStartsOnVisible && !paused && !startScreen && !loading && startedAt != nil && now.timeIntervalSince(lastInput) >= 10 { pauseGame() }
         let delta = now.timeIntervalSince(lastStatisticsTick)
         lastStatisticsTick = now
         if NSApp.isActive && !loading && !restoring && startedAt != nil && delta >= 0 && delta < 1 {

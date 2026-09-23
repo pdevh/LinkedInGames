@@ -18,6 +18,10 @@ ad-hoc signed, not Apple-notarized. Updater-enabled releases check GitHub
 Releases and prompt before installing new signed versions. See
 [update and release instructions](UPDATES.md).
 
+In the LinkedInGames menu, **Start Zip Timer When Puzzle Appears** starts the
+clock when the board becomes visible. It is off by default, so the clock
+otherwise starts on the first move. The selected option is saved between runs.
+
 ## Build and test
 
 With the Xcode command-line tools installed:
