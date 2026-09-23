@@ -15,6 +15,16 @@ struct Edge: Hashable, Codable {
     }
 }
 
+// Keep an active drag on the playable board after the pointer leaves it.
+// Retaining the clamped point is important: a move right, then up while still
+// outside the window must trace those two legs along the board edge.
+enum BoardDrag {
+    static func clamped(_ point: NSPoint, to rect: NSRect) -> NSPoint {
+        NSPoint(x: min(max(point.x, rect.minX), rect.maxX.nextDown),
+                y: min(max(point.y, rect.minY), rect.maxY.nextDown))
+    }
+}
+
 enum Difficulty: Int, CaseIterable {
     case easy, medium, hard
     var title: String { ["EASY", "MEDIUM", "HARD"][rawValue] }
@@ -372,10 +382,16 @@ final class BoardView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard dragging && !isWon && !isHidden else { return }
         onInput?()
-        let point = convert(event.locationInWindow, from: nil)
-        let previous = previousPoint ?? point
+        let rawPoint = convert(event.locationInWindow, from: nil)
+        previousPoint = traceDrag(from: previousPoint ?? rawPoint, to: rawPoint)
+    }
+    @discardableResult
+    func traceDrag(from rawPrevious: NSPoint, to rawPoint: NSPoint) -> NSPoint {
+        let rect = boardRect()
+        let point = BoardDrag.clamped(rawPoint, to: rect)
+        let previous = BoardDrag.clamped(rawPrevious, to: rect)
         let distance = hypot(point.x - previous.x, point.y - previous.y)
-        let step = boardRect().width / CGFloat(puzzle.size)
+        let step = rect.width / CGFloat(puzzle.size)
         let samples = max(1, Int(ceil(distance / (step * 0.18))))
         for i in 1...samples {
             let t = CGFloat(i) / CGFloat(samples)
@@ -383,7 +399,7 @@ final class BoardView: NSView {
                                  y: previous.y + (point.y - previous.y) * t)
             if let c = cell(at: sample) { advance(to: c) }
         }
-        previousPoint = point
+        return point
     }
     override func mouseUp(with event: NSEvent) { dragging = false; previousPoint = nil }
     private func advance(to c: Cell) {
@@ -635,6 +651,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     private var playControls: [NSView] = []
     private let hintButton = NSButton(title: "Hint · 30s", target: nil, action: nil)
     private let successButton = GameActionButton(title: "New puzzle  →", target: nil, action: nil)
+    private let successStatisticsButton = NSButton(title: "Statistics", target: nil, action: nil)
     private let successTitle = NSTextField(labelWithString: "Puzzle complete")
     private let successTime = NSTextField(labelWithString: "")
     private var difficulty: Difficulty = .easy
@@ -666,7 +683,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
     private func present(_ view:NSView, name:String) {
         window.delegate = nil
-        let size = NSSize(width:660,height:name == "patches" ? 860 : 820)
+        let size = NSSize(width:660,height:820)
         window.contentView = view
         window.setContentSize(size)
         window.title = name == "home" ? "LinkedInGames" : "LinkedInGames · \(name.capitalized)"
@@ -706,6 +723,15 @@ final class GameController: NSObject, NSApplicationDelegate {
         patchesItem.target = self
         appMenu.addItem(patchesItem)
 
+        appMenu.addItem(NSMenuItem.separator())
+        let checkUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        checkUpdatesItem.target = self
+        appMenu.addItem(checkUpdatesItem)
+        let autoUpdatesItem = NSMenuItem(title: "Automatically Check for Updates", action: #selector(toggleAutomaticUpdateChecks(_:)), keyEquivalent: "")
+        autoUpdatesItem.target = self
+        autoUpdatesItem.state = UpdateService.shared.automaticallyChecksForUpdates ? .on : .off
+        appMenu.addItem(autoUpdatesItem)
+
         let quitItem = NSMenuItem(title: "Quit LinkedInGames", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         appMenu.addItem(quitItem)
@@ -721,6 +747,17 @@ final class GameController: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateService.shared.checkForUpdates()
+    }
+
+    @objc private func toggleAutomaticUpdateChecks(_ sender: NSMenuItem) {
+        let enabled = !UpdateService.shared.automaticallyChecksForUpdates
+        UpdateService.shared.automaticallyChecksForUpdates = enabled
+        sender.state = enabled ? .on : .off
+        if enabled { UpdateService.shared.checkForUpdatesInBackground() }
     }
 
     private var storageKey: String { "zip.progress.v1.\(difficulty.rawValue)" }
@@ -796,6 +833,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         installApplicationMenu()
+        UpdateService.shared.checkForUpdatesInBackground()
         do {
             let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             let preview = CommandLine.arguments.contains("--preview-patches")
@@ -829,36 +867,26 @@ final class GameController: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
 
         let patchesButton = NSButton(title: "‹ Games", target: self, action: #selector(showHome))
-        patchesButton.frame = NSRect(x: 149, y: 778, width: 105, height: 30)
-        patchesButton.bezelStyle = .rounded
-        title.font = .systemFont(ofSize: 22, weight: .bold)
-        title.textColor = NSColor(calibratedWhite: 0.10, alpha: 1)
-        subtitle.font = .systemFont(ofSize: 14)
-        subtitle.textColor = NSColor(calibratedWhite: 0.34, alpha: 1)
-        timerLabel.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
-        timerLabel.textColor = NSColor(calibratedWhite: 0.20, alpha: 1)
+        patchesButton.frame = NSRect(x: GameUIStyle.headerHomeX, y: 778, width: 34, height: 34)
+        GameUIStyle.backButton(patchesButton)
+        GameUIStyle.title(title)
+        GameUIStyle.status(subtitle)
+        GameUIStyle.timer(timerLabel)
         progressLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         progressLabel.textColor = NSColor(calibratedWhite: 0.36, alpha: 1)
         progressLabel.alignment = .right
         difficultyControl.onChange = { [weak self] selected in self?.changeDifficulty(selected) }
 
         let reset = NSButton(title: "Reset", target: self, action: #selector(resetGame))
-        let new = NSButton(title: "New game", target: self, action: #selector(newGame))
+        let new = NSButton(title: "New puzzle", target: self, action: #selector(newGame))
         let undo = NSButton(title: "Undo", target: self, action: #selector(undoMove))
         successButton.target = self; successButton.action = #selector(newGame)
         hintButton.target = self; hintButton.action = #selector(useHint)
         statisticsButton.target = self; statisticsButton.action = #selector(showStatistics)
         hintButton.toolTip = "Up to 3 hints per puzzle. Unlocks after 30 seconds of active play, with 30 seconds between hints."
         playControls = [timerLabel, progressLabel, reset, undo, new, hintButton]
-        for button in [reset, new, undo, hintButton, statisticsButton] {
-            button.isBordered = false; button.font = .systemFont(ofSize: 14, weight: .semibold)
-            button.contentTintColor = NSColor(calibratedWhite: 0.18, alpha: 1)
-            button.wantsLayer = true; button.layer?.backgroundColor = NSColor.white.cgColor
-            button.layer?.cornerRadius = 10
-        }
-        new.contentTintColor = .white
-        new.layer?.backgroundColor = NSColor(calibratedRed: 0.94, green: 0.23, blue: 0.17, alpha: 1).cgColor
-        statisticsButton.layer?.backgroundColor = NSColor.white.cgColor
+        for button in [reset, undo, hintButton, statisticsButton] { GameUIStyle.button(button) }
+        GameUIStyle.button(new, primary: true)
         successPanel.wantsLayer = true
         successPanel.isHidden = true
         successTitle.font = .systemFont(ofSize: 20, weight: .semibold); successTitle.alignment = .left
@@ -868,9 +896,11 @@ final class GameController: NSObject, NSApplicationDelegate {
         successButton.contentTintColor = .white; successButton.wantsLayer = true
         successButton.layer?.backgroundColor = NSColor(calibratedRed: 0.12, green: 0.28, blue: 0.86, alpha: 1).cgColor
         successButton.layer?.cornerRadius = 11
-        for v in [successTitle, successTime, successButton] {
+        for v in [successTitle, successTime, successStatisticsButton, successButton] {
             successPanel.addSubview(v); v.translatesAutoresizingMaskIntoConstraints = false
         }
+        GameUIStyle.button(successStatisticsButton)
+        successStatisticsButton.target = self; successStatisticsButton.action = #selector(showStatistics)
         new.keyEquivalent = "n"; new.keyEquivalentModifierMask = .command
         undo.keyEquivalent = "z"; undo.keyEquivalentModifierMask = .command
         loadingLabel.font = .systemFont(ofSize: 15, weight: .medium)
@@ -908,18 +938,26 @@ final class GameController: NSObject, NSApplicationDelegate {
             self.showSuccessPanel()
             self.difficultyToast.show(verdict: self.progress.statistics?.experiencedDifficulty, accent: self.board.accentColor)
         }
-        for v in [windowDragArea, title, subtitle, timerLabel, progressLabel, difficultyControl, statisticsButton, board, reset, new, undo, hintButton, loadingLabel, spinner] {
+        for v in [windowDragArea, title, subtitle, timerLabel, progressLabel, difficultyControl, board, reset, new, undo, hintButton, loadingLabel, spinner] {
             content.addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         content.addSubview(patchesButton)
+        patchesButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            patchesButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: GameUIStyle.headerHomeX),
+            patchesButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            patchesButton.widthAnchor.constraint(equalToConstant: 34),
+            patchesButton.heightAnchor.constraint(equalToConstant: 34)
+        ])
         content.addSubview(successPanel); successPanel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(difficultyToast); difficultyToast.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statisticsScreen); statisticsScreen.translatesAutoresizingMaskIntoConstraints = false
         statisticsScreen.isHidden = true
         statisticsScreen.onClose = { [weak self] in
             self?.difficultyControl.isHidden = false
-            self?.statisticsButton.isHidden = false
+            self?.statisticsButton.isHidden = self?.progress.completed == true
+            self?.successStatisticsButton.isHidden = false
             self?.window.makeFirstResponder(self?.board)
         }
         NSLayoutConstraint.activate([
@@ -939,7 +977,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             windowDragArea.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             windowDragArea.topAnchor.constraint(equalTo: content.topAnchor),
             windowDragArea.heightAnchor.constraint(equalToConstant: 56),
-            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 88),
+            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: GameUIStyle.headerTitleX),
             title.topAnchor.constraint(equalTo: content.topAnchor, constant: 15),
             subtitle.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 36),
             subtitle.topAnchor.constraint(equalTo: content.topAnchor, constant: 68),
@@ -947,10 +985,6 @@ final class GameController: NSObject, NSApplicationDelegate {
             difficultyControl.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             difficultyControl.widthAnchor.constraint(equalToConstant: 226),
             difficultyControl.heightAnchor.constraint(equalToConstant: 38),
-            statisticsButton.trailingAnchor.constraint(equalTo: difficultyControl.leadingAnchor, constant: -12),
-            statisticsButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            statisticsButton.widthAnchor.constraint(equalToConstant: 96),
-            statisticsButton.heightAnchor.constraint(equalToConstant: 30),
             board.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             board.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
             board.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 14),
@@ -965,22 +999,31 @@ final class GameController: NSObject, NSApplicationDelegate {
             undo.leadingAnchor.constraint(equalTo: reset.trailingAnchor, constant: 8),
             undo.centerYAnchor.constraint(equalTo: reset.centerYAnchor),
             undo.widthAnchor.constraint(equalToConstant: 76), undo.heightAnchor.constraint(equalToConstant: 34),
-            hintButton.trailingAnchor.constraint(equalTo: board.trailingAnchor, constant: -6),
+            hintButton.leadingAnchor.constraint(equalTo: undo.trailingAnchor, constant: 8),
             hintButton.centerYAnchor.constraint(equalTo: reset.centerYAnchor),
             hintButton.widthAnchor.constraint(equalToConstant: 114),
-            hintButton.heightAnchor.constraint(equalToConstant: 34),
-            new.centerXAnchor.constraint(equalTo: board.centerXAnchor),
+            hintButton.heightAnchor.constraint(equalToConstant: GameUIStyle.controlHeight),
+            new.trailingAnchor.constraint(equalTo: board.trailingAnchor, constant: -6),
             new.centerYAnchor.constraint(equalTo: reset.centerYAnchor),
-            new.widthAnchor.constraint(equalToConstant: 106), new.heightAnchor.constraint(equalToConstant: 34),
+            new.widthAnchor.constraint(equalToConstant: 106), new.heightAnchor.constraint(equalToConstant: GameUIStyle.controlHeight),
+            statisticsButton.trailingAnchor.constraint(equalTo: new.leadingAnchor, constant: -8),
+            statisticsButton.centerYAnchor.constraint(equalTo: reset.centerYAnchor),
+            statisticsButton.widthAnchor.constraint(equalToConstant: 96),
+            statisticsButton.heightAnchor.constraint(equalToConstant: GameUIStyle.controlHeight),
             successPanel.centerXAnchor.constraint(equalTo: board.centerXAnchor),
             successPanel.topAnchor.constraint(equalTo: board.bottomAnchor, constant: 16),
             successPanel.widthAnchor.constraint(equalTo: board.widthAnchor, constant: -12),
             successPanel.heightAnchor.constraint(equalToConstant: 72),
             successTitle.topAnchor.constraint(equalTo: successPanel.topAnchor, constant: 8),
             successTitle.leadingAnchor.constraint(equalTo: successPanel.leadingAnchor),
+            successTitle.trailingAnchor.constraint(equalTo: successStatisticsButton.leadingAnchor, constant: -12),
             successTime.topAnchor.constraint(equalTo: successTitle.bottomAnchor, constant: 5),
             successTime.leadingAnchor.constraint(equalTo: successTitle.leadingAnchor),
             successTime.trailingAnchor.constraint(equalTo: successTitle.trailingAnchor),
+            successStatisticsButton.centerYAnchor.constraint(equalTo: successPanel.centerYAnchor),
+            successStatisticsButton.trailingAnchor.constraint(equalTo: successButton.leadingAnchor, constant: -8),
+            successStatisticsButton.widthAnchor.constraint(equalToConstant: 96),
+            successStatisticsButton.heightAnchor.constraint(equalToConstant: GameUIStyle.controlHeight),
             successButton.centerYAnchor.constraint(equalTo: successPanel.centerYAnchor),
             successButton.trailingAnchor.constraint(equalTo: successPanel.trailingAnchor),
             successButton.widthAnchor.constraint(equalToConstant: 150),
@@ -1022,7 +1065,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             precondition(window.contentView === home)
             showPatches()
             precondition(window.contentView === patchesContent && activeGame == "patches")
-            precondition(window.contentView!.bounds.height == 860)
+            precondition(window.contentView!.bounds.height == 820)
             showHome()
             precondition(window.contentView === home && window.contentView!.bounds.height == 820)
             showZip()
@@ -1070,6 +1113,7 @@ final class GameController: NSObject, NSApplicationDelegate {
         difficultyToast.dismiss()
         difficultyControl.isHidden = true
         statisticsButton.isHidden = true
+        successStatisticsButton.isHidden = true
         statisticsScreen.show(records: store.snapshot.records)
         window.makeFirstResponder(statisticsScreen)
     }
@@ -1156,6 +1200,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     @objc private func undoMove() { if !paused && !startScreen && !loading { board.undo() } }
     private func showSuccessPanel() {
         playControls.forEach { $0.isHidden = true }
+        statisticsButton.isHidden = true
         successButton.layer?.backgroundColor = board.accentColor.cgColor
         successTitle.stringValue = "Level \(progress.solved.count) complete"
         successPanel.isHidden = false; successPanel.alphaValue = 0
@@ -1168,6 +1213,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     private func hideSuccessPanel() {
         difficultyToast.dismiss()
         playControls.forEach { $0.isHidden = false }
+        statisticsButton.isHidden = false
         successPanel.layer?.removeAllAnimations(); successPanel.alphaValue = 1; successPanel.isHidden = true
     }
     private func showStartScreen() {

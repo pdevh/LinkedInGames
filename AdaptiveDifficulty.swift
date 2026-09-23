@@ -8,6 +8,8 @@ struct AdaptiveDifficulty {
     var weights = [Double](repeating: 0, count: 13)
     var sampleCount = 0
     var targets = [0.25, 0.65, 1.15]
+    // Only repeated difficulty on Easy unlocks extra clues and blocking walls.
+    private(set) var needsEasyGuidance = false
     private var evidence: [(x: [Double], residual: Double, weight: Double)] = []
     private var featureScales = [Double](repeating: 0.1, count: 13)
 
@@ -66,6 +68,9 @@ struct AdaptiveDifficulty {
         }
         sampleCount = recent.count
         guard sampleCount > 0 else { return }
+        let recentEasy = recent.prefix(12).filter { $0.0.difficulty == Difficulty.easy.title }
+        needsEasyGuidance = recentEasy.count >= 3 &&
+            recentEasy.reduce(0.0) { $0 + $1.1 } / Double(recentEasy.count) >= 0.8
         let rows = recent.enumerated().map { age, item -> ([Double], Double, Double) in
             let (record, y) = item
             let reusable = (2...4).contains(record.generatorVersion) && Self.names.allSatisfy { record.features[$0] != nil }
@@ -190,13 +195,49 @@ struct AdaptiveDifficulty {
         for i in 0..<3 { mass[i] = (mass[i]+priorWeight*prior[i])/(total+priorWeight) }
         return Forecast(probabilities: mass, effort: mean, support: total/(total+priorWeight))
     }
+    // Count moments where a player following the correct route could legally
+    // choose a different, still-unvisited square. This is a concrete floor on
+    // interaction, unlike wall or junction counts alone.
+    static func openChoices(_ puzzle: Puzzle) -> Int {
+        let order = Dictionary(uniqueKeysWithValues: puzzle.solution.enumerated().map { ($0.element,$0.offset) })
+        var nextClue = 2, decisions = 0
+        for (index, cell) in puzzle.solution.dropLast().enumerated() {
+            let options = [Cell(x:cell.x-1,y:cell.y),Cell(x:cell.x+1,y:cell.y),
+                           Cell(x:cell.x,y:cell.y-1),Cell(x:cell.x,y:cell.y+1)].filter { neighbor in
+                guard neighbor.x >= 0 && neighbor.x < puzzle.size && neighbor.y >= 0 && neighbor.y < puzzle.size,
+                      let position = order[neighbor], position > index,
+                      !puzzle.walls.contains(Edge(cell,neighbor)) else { return false }
+                return puzzle.clues[neighbor].map { $0 == nextClue } ?? true
+            }
+            if options.count > 1 { decisions += 1 }
+            if puzzle.clues[puzzle.solution[index+1]] != nil { nextClue += 1 }
+        }
+        return decisions
+    }
     func choose(_ difficulty: Difficulty, from candidates: [Puzzle]) -> Puzzle {
         precondition(!candidates.isEmpty)
-        var best = candidates[0], bestForecast = forecast(best)
-        for candidate in candidates.dropFirst() {
+        // A first-time Easy player still needs choices to reason through. Keep
+        // the initial board small, but avoid nearly solved paths and mazes.
+        let eligible: [Puzzle]
+        if difficulty == .easy && !needsEasyGuidance {
+            let small = candidates.filter { $0.size == Difficulty.easy.size }
+            let engaging = small.filter {
+                let f = PlayStatistics.extractFeatures($0)
+                return $0.clues.count <= 6 && (f["maxCheckpointGap"] ?? 0) >= 5 &&
+                    Self.openChoices($0) >= 2
+            }
+            eligible = engaging.isEmpty ? (small.isEmpty ? candidates : small) : engaging
+        } else { eligible = candidates }
+        var best = eligible[0], bestForecast = forecast(best)
+        for candidate in eligible.dropFirst() {
             let next = forecast(candidate)
             let qualifies = next.qualifies(difficulty), bestQualifies = bestForecast.qualifies(difficulty)
-            if (qualifies && !bestQualifies) || (qualifies == bestQualifies && next.utility(difficulty, targets: targets) > bestForecast.utility(difficulty, targets: targets)) {
+            // Cold-start priors do not measure human skill. Aim for a modest
+            // challenge instead of minimizing predicted effort to zero.
+            let coldStart = difficulty == .easy && sampleCount < 8 && !needsEasyGuidance
+            let score = coldStart ? -abs(next.effort - 0.65) : next.utility(difficulty, targets: targets)
+            let bestScore = coldStart ? -abs(bestForecast.effort - 0.65) : bestForecast.utility(difficulty, targets: targets)
+            if (coldStart ? score > bestScore : ((qualifies && !bestQualifies) || (qualifies == bestQualifies && score > bestScore))) {
                 best = candidate; bestForecast = next
             }
         }
@@ -215,10 +256,11 @@ struct AdaptiveDifficulty {
         // Search beyond the first batch when it does not meet the requested level.
         // Easy gets progressively more guidance, not merely more random boards.
         for round in 0..<3 {
+            if difficulty == .easy && !needsEasyGuidance { break }
             if !candidates.isEmpty && forecast(choose(difficulty, from: candidates)).qualifies(difficulty) { break }
             for _ in 0..<6 {
                 var candidate = Puzzle.make(difficulty)
-                if difficulty == .easy { candidate = candidate.guided(maxGap: [4, 3, 2][round], blockedFraction: [0.25, 0.5, 0.75][round]) }
+                if difficulty == .easy && needsEasyGuidance { candidate = candidate.guided(maxGap: [4, 3, 2][round], blockedFraction: [0.25, 0.5, 0.75][round]) }
                 if !excluded.contains(candidate.solution) { candidates.append(candidate) }
             }
         }

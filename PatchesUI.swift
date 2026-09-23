@@ -20,33 +20,17 @@ private enum PatchArtwork {
         color.withAlphaComponent(numbered ? 0.95 : 0.53).setFill()
         path.fill()
         if shape == .any {
-            color.withAlphaComponent(0.9).setStroke()
-            path.lineWidth = 1.6
-            path.setLineDash([3, 2], count: 2, phase: 0)
-            path.stroke()
-        }
-    }
-}
-
-private final class PatchLegendView: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let heading = NSAttributedString(string: "Complete each shape to fill the grid", attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: NSColor(calibratedWhite: 0.20, alpha: 1)
-        ])
-        heading.draw(at: NSPoint(x: 0, y: 43))
-        let entries: [(PatchShape, String, CGFloat, CGFloat)] = [
-            (.square, "Square", 0, 23), (.tall, "Tall rectangle", 270, 23),
-            (.wide, "Wide rectangle", 0, 1), (.any, "Any rectangle", 270, 1)
-        ]
-        for (shape, title, x, y) in entries {
-            let cell = NSRect(x: x, y: y, width: 19, height: 19)
-            PatchArtwork.draw(PatchArtwork.badge(for: shape, in: cell),
-                              shape: shape, color: .systemGray, numbered: false)
-            NSAttributedString(string: title, attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: NSColor(calibratedWhite: 0.27, alpha: 1)
-            ]).draw(at: NSPoint(x: x+25, y: y+1))
+            // Four edge tabs communicate freedom along both axes.
+            color.withAlphaComponent(numbered ? 0.45 : 0.30).setFill()
+            let depth = badge.width * 0.16, length = badge.width * 0.56
+            for handle in [
+                NSRect(x: badge.midX-length/2, y: badge.minY-depth, width: length, height: depth+2),
+                NSRect(x: badge.midX-length/2, y: badge.maxY-2, width: length, height: depth+2),
+                NSRect(x: badge.minX-depth, y: badge.midY-length/2, width: depth+2, height: length),
+                NSRect(x: badge.maxX-2, y: badge.midY-length/2, width: depth+2, height: length)
+            ] {
+                NSBezierPath(roundedRect: handle, xRadius: 3, yRadius: 3).fill()
+            }
         }
     }
 }
@@ -146,7 +130,12 @@ final class PatchesBoardView: NSView {
     }
     private func updateSelection(_ event: NSEvent) -> PatchRect? {
         guard let anchor, let puzzle else { return nil }
-        let point = convert(event.locationInWindow, from:nil)
+        // AppKit keeps delivering the originating view's drag and mouse-up
+        // events outside the window. Resolve them against the nearest playable
+        // edge so a release after overshooting still chooses the edge cell.
+        let playable = NSRect(x:grid.minX,y:grid.minY,
+                              width:CGFloat(puzzle.size)*unit,height:CGFloat(puzzle.size)*unit)
+        let point = BoardDrag.clamped(convert(event.locationInWindow, from:nil), to:playable)
         let x = Double((point.x-grid.minX)/unit), y = Double((point.y-grid.minY)/unit)
         let result = PatchSelection.resolve(anchor:anchor,x:x,y:y,puzzle:puzzle,placed:placed,previous:preview)
         if let c = PatchSelection.cell(x:x,y:y,size:puzzle.size) { cursor = c }
@@ -198,6 +187,71 @@ final class PatchesBoardView: NSView {
     }
 }
 
+final class PatchesStatisticsScreen: NSView {
+    var onClose: (() -> Void)?
+    private let close = NSButton(title: "‹ Back to game", target: nil, action: nil)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = GameUIStyle.background.cgColor
+        autoresizingMask = [.width, .height]
+        GameUIStyle.button(close)
+        close.frame = NSRect(x:30,y:frameRect.height-56,width:130,height:34)
+        close.target = self; close.action = #selector(closeScreen)
+        addSubview(close)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func label(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat,
+                       size: CGFloat = 14, bold: Bool = false, secondary: Bool = false) {
+        let field = NSTextField(wrappingLabelWithString:value)
+        field.font = .systemFont(ofSize:size, weight:bold ? .semibold : .regular)
+        field.textColor = secondary ? .secondaryLabelColor : GameUIStyle.ink
+        field.frame = NSRect(x:x,y:y,width:width,height:height)
+        addSubview(field)
+    }
+    private func card(value: String, title: String, detail: String, x: CGFloat, y: CGFloat) {
+        let width:CGFloat = 190
+        let surface = NSView(frame:NSRect(x:x,y:y,width:width,height:110))
+        surface.wantsLayer = true
+        surface.layer?.backgroundColor = NSColor.white.cgColor
+        surface.layer?.cornerRadius = 14
+        surface.layer?.borderColor = NSColor(calibratedWhite:0.88,alpha:1).cgColor
+        surface.layer?.borderWidth = 1
+        addSubview(surface)
+        label(value,x:x+14,y:y+65,width:width-28,height:36,size:28,bold:true)
+        label(title,x:x+14,y:y+39,width:width-28,height:20,size:13,bold:true)
+        label(detail,x:x+14,y:y+14,width:width-28,height:18,size:11,secondary:true)
+    }
+    func show(records: [PatchesRecord]) {
+        subviews.filter { $0 !== close }.forEach { $0.removeFromSuperview() }
+        let solved = records.filter(\.solved)
+        let measured = solved.filter { $0.effort != nil }
+        let rated = solved.filter { $0.verdict != nil }
+        let matched = rated.filter { $0.verdict == Difficulty(rawValue:$0.requested)?.title.lowercased() }.count
+        let times = measured.map(\.activeSeconds).sorted()
+        let median:Double? = times.isEmpty ? nil : times.count % 2 == 1 ? times[times.count/2] : (times[times.count/2-1]+times[times.count/2])/2
+        let timeText = median.map { String(format:"%d:%02d",Int($0)/60,Int($0)%60) } ?? "—"
+        label("Your Patches statistics",x:30,y:660,width:600,height:40,size:26,bold:true)
+        label("All difficulties combined",x:30,y:632,width:600,height:22,secondary:true)
+        card(value:"\(solved.count)",title:"Solved",detail:"Patches only",x:30,y:495)
+        card(value:timeText,title:"Typical solve time",detail:"Based on \(measured.count) measured",x:235,y:495)
+        card(value:rated.isEmpty ? "—" : "\(Int((Double(matched)/Double(rated.count)*100).rounded()))%",
+             title:"Difficulty match",detail:"Based on \(rated.count) rated",x:440,y:495)
+        label("How puzzle picks adapt",x:30,y:433,width:600,height:26,size:18,bold:true)
+        label("Patches uses active time, corrections, hesitation, hints, and resets from measured solves. " +
+              "Predictions gain full weight after eight; difficulty targets keep adapting as you play.",
+              x:30,y:357,width:600,height:66,size:14,secondary:true)
+        label("\(solved.filter { $0.hints == 0 }.count) solved without hints",x:30,y:309,width:600,height:24,size:14)
+        label("Forecasts are estimates. Patches history stays separate from Zip.",
+              x:30,y:278,width:600,height:44,size:13,secondary:true)
+        superview?.addSubview(self, positioned:.above, relativeTo:nil)
+        isHidden = false
+    }
+    @objc private func closeScreen() { isHidden = true; onClose?() }
+}
+
 final class PatchesController: NSObject, NSWindowDelegate {
     private let store: ProgressStore
     private var snapshot: PatchesSnapshot
@@ -207,12 +261,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
     private let board = PatchesBoardView(frame:.zero)
     private let status = NSTextField(labelWithString:"Draw a rectangle around each clue")
     private let timerLabel = NSTextField(labelWithString:"00:00")
-    private let summary = NSTextField(labelWithString:"")
     private let hint = NSButton(title:"Hint · 30s",target:nil,action:nil)
     private let undo = NSButton(title:"Undo",target:nil,action:nil)
     private let reset = NSButton(title:"Reset",target:nil,action:nil)
     private let play = NSButton(title:"Play",target:nil,action:nil)
     private let picker = DifficultyPicker()
+    private let statisticsScreen = PatchesStatisticsScreen(frame:NSRect(x:0,y:0,width:660,height:790))
     private let toast = DifficultyToast()
     private let welcome = NSView()
     private let welcomeTitle = NSTextField(labelWithString:"Everything in its place.")
@@ -236,7 +290,11 @@ final class PatchesController: NSObject, NSWindowDelegate {
     var onHome: (() -> Void)?
     var gameContent: NSView { window.contentView! }
     func attach(to host: NSWindow) { window = host; host.delegate = self; isPresented = true }
-    func leave() { if !paused { tick() }; pause(); isPresented = false }
+    func leave() {
+        if !paused { tick() }
+        pause(); statisticsScreen.isHidden = true; picker.isHidden = false
+        isPresented = false
+    }
     @objc private func goHome() { leave(); onHome?() }
     func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
     func smokePlay(completion: @escaping (Bool) -> Void) {
@@ -265,7 +323,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         session = PatchesSession(record: PatchesRecord(puzzle: puzzle, requested: 2), placed: Array(puzzle.solution.prefix(4)))
         board.puzzle = puzzle; board.placed = session!.placed; board.enabled = true; paused = false
         picker.selected = 2
-        status.stringValue = "Draw from corner to corner · Match the clue"
+        status.stringValue = "\(session!.placed.reduce(0) { $0+$1.area }) / \(puzzle.size*puzzle.size) cells filled"
         if welcomeOnly { session = nil; paused = true; board.enabled = false }
         refresh()
         let content = window.contentView!
@@ -276,40 +334,47 @@ final class PatchesController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() {
-        let root = NSView(frame:NSRect(x:0,y:0,width:660,height:860))
-        root.wantsLayer = true; root.layer?.backgroundColor = NSColor(calibratedWhite:0.965,alpha:1).cgColor
-        window = NSWindow(contentRect:root.bounds,styleMask:[.titled,.closable,.miniaturizable],backing:.buffered,defer:false)
-        window.title = "Patches"; window.contentView = root; window.isReleasedWhenClosed = false; window.delegate = self; window.center()
+        let root = NSView(frame:NSRect(x:0,y:0,width:660,height:820))
+        root.wantsLayer = true; root.layer?.backgroundColor = GameUIStyle.background.cgColor
+        window = NSWindow(contentRect:root.bounds,styleMask:[.titled,.closable,.miniaturizable,.fullSizeContentView],backing:.buffered,defer:false)
+        window.title = "Patches"; window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true; window.titlebarSeparatorStyle = .none
+        window.backgroundColor = GameUIStyle.background
+        window.contentView = root; window.isReleasedWhenClosed = false; window.delegate = self; window.center()
         let title = NSTextField(labelWithString:"Patches")
-        title.font = .systemFont(ofSize:27,weight:.bold)
-        title.frame = NSRect(x:146,y:795,width:210,height:36)
+        GameUIStyle.title(title)
+        title.frame = NSRect(x:GameUIStyle.headerTitleX,y:778,width:120,height:34)
         let home = NSButton(title:"‹ Games",target:self,action:#selector(goHome))
-        home.bezelStyle = .rounded; home.frame = NSRect(x:36,y:798,width:95,height:30)
+        GameUIStyle.backButton(home); home.frame = NSRect(x:GameUIStyle.headerHomeX,y:778,width:34,height:34)
         root.addSubview(home)
-        picker.frame = NSRect(x:398,y:795,width:226,height:38)
+        picker.frame = NSRect(x:410,y:776,width:226,height:38)
         picker.selected = difficulty.rawValue
         picker.onChange = { [weak self] d in self?.changeDifficulty(Difficulty(rawValue:d) ?? .easy) }
-        let rules = PatchLegendView(frame:NSRect(x:36,y:726,width:588,height:62))
-        board.frame = NSRect(x:30,y:122,width:600,height:600)
-        status.frame = NSRect(x:36,y:96,width:510,height:22); status.font = .systemFont(ofSize:13,weight:.medium)
-        timerLabel.frame = NSRect(x:555,y:96,width:70,height:22); timerLabel.font = .monospacedDigitSystemFont(ofSize:15,weight:.medium); timerLabel.alignment = .right
+        board.frame = NSRect(x:30,y:130,width:600,height:600)
+        timerLabel.frame = NSRect(x:36,y:96,width:82,height:24); GameUIStyle.timer(timerLabel)
+        status.frame = NSRect(x:132,y:98,width:492,height:22); GameUIStyle.status(status)
+        status.alignment = .right
         let new = NSButton(title:"New puzzle",target:self,action:#selector(newPuzzle))
         newButton = new
         let stats = NSButton(title:"Statistics",target:self,action:#selector(showStatistics))
-        let buttons = [undo,reset,hint,play,new,stats]
-        for (i,button) in buttons.enumerated() {
-            button.frame = NSRect(x:36+CGFloat(i)*99,y:50,width:93,height:34)
-            button.bezelStyle = .rounded; button.font = .systemFont(ofSize:13,weight:.semibold)
+        // Stable groups, aligned to both edges of the board.
+        let buttons: [(NSButton, CGFloat, CGFloat)] = [
+            (play,36,34), (reset,78,68), (undo,154,68), (hint,230,110),
+            (stats,408,98), (new,514,110)
+        ]
+        for (button,x,width) in buttons {
+            button.frame = NSRect(x:x,y:40,width:width,height:GameUIStyle.controlHeight)
+            GameUIStyle.button(button, primary: button === new)
             root.addSubview(button)
         }
-        undo.target = self; undo.action = #selector(undoMove); undo.keyEquivalent = "z"
+        play.imagePosition = .imageOnly
+        undo.target = self; undo.action = #selector(undoMove); undo.keyEquivalent = "z"; undo.keyEquivalentModifierMask = .command
         reset.target = self; reset.action = #selector(resetBoard)
         play.target = self; play.action = #selector(togglePlay)
         hint.target = self; hint.action = #selector(useHint)
-        new.keyEquivalent = "n"
+        new.keyEquivalent = "n"; new.keyEquivalentModifierMask = .command
         hint.toolTip = "Three hints maximum; each unlocks after 30 seconds of active play."
-        summary.frame = NSRect(x:36,y:15,width:588,height:24); summary.font = .systemFont(ofSize:12); summary.textColor = .secondaryLabelColor
-        for v in [title,picker,rules,board,status,timerLabel,summary,toast] { root.addSubview(v) }
+        for v in [title,picker,board,status,timerLabel,toast] { root.addSubview(v) }
         toast.frame = NSRect(x:117,y:137,width:426,height:76)
         welcome.frame = board.frame
         welcome.wantsLayer = true
@@ -326,6 +391,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
         welcomePlay.font = .systemFont(ofSize:16,weight:.semibold); welcomePlay.target = self; welcomePlay.action = #selector(togglePlay)
         for view in [welcomeTitle,welcomeDetail,welcomePlay] { welcome.addSubview(view) }
         root.addSubview(welcome)
+        statisticsScreen.isHidden = true
+        root.addSubview(statisticsScreen)
+        statisticsScreen.onClose = { [weak self] in
+            self?.picker.isHidden = false
+            self?.window.makeFirstResponder(self?.board)
+        }
 
         board.onInput = { [weak self] in self?.lastInput = Date() }
         board.onMessage = { [weak self] message in self?.status.stringValue = message }
@@ -355,7 +426,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
         for button in [undo,reset,hint,play,newButton!] { button.isHidden = showWelcome }
         timerLabel.isHidden = showWelcome; status.isHidden = showWelcome
 
-        play.title = paused ? (session == nil ? "Play" : "Resume") : "Pause"; play.isEnabled = !loading && !solved
+        let playLabel = paused ? "Resume" : "Pause"
+        play.title = ""
+        play.image = NSImage(systemSymbolName: paused ? "play.fill" : "pause.fill", accessibilityDescription: playLabel)
+        play.imagePosition = .imageOnly
+        play.toolTip = playLabel; play.setAccessibilityLabel(playLabel)
+        play.isEnabled = !loading && !solved
         undo.isEnabled = !paused && !solved && !(session?.undo.isEmpty ?? true)
         reset.isEnabled = !paused && !solved && !(session?.placed.isEmpty ?? true)
         let wait = Int(ceil(max(0,(session?.record.nextHintAt ?? 30)-(session?.record.activeSeconds ?? 0))))
@@ -365,13 +441,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
         if loading { status.stringValue = "Creating your puzzle…" }
         else if solved { status.stringValue = "Puzzle complete · \(session?.record.verdict ?? "") for you" }
         else if paused { status.stringValue = session == nil ? "Ready when you are · Press Play" : "Paused · Progress saved" }
-        let n = snapshot.records.filter(\.solved).count
-        summary.stringValue = "\(n) solved · \(n < 8 ? "Learning your pace" : "Personalized difficulty") · Number = cells · Unnumbered = choose the size"
+
     }
     @objc private func togglePlay() {
         guard !loading else { return }
         if session == nil { newPuzzle(); return }
-        if paused { paused = false; board.enabled = true; lastTick = Date(); lastInput = Date(); status.stringValue = "Draw from corner to corner · Match the clue"; window.makeFirstResponder(board) }
+        if paused { paused = false; board.enabled = true; lastTick = Date(); lastInput = Date(); status.stringValue = "\(session!.placed.reduce(0) { $0+$1.area }) / \(session!.record.puzzle.size*session!.record.puzzle.size) cells filled"; window.makeFirstResponder(board) }
         else { pause() }
         refresh()
     }
@@ -466,13 +541,8 @@ final class PatchesController: NSObject, NSWindowDelegate {
     }
     @objc private func showStatistics() {
         if !paused { tick(); pause() }
-        let records = snapshot.records.filter(\.solved)
-        let rated = records.filter { $0.verdict != nil }
-        let matched = rated.filter { $0.verdict == Difficulty(rawValue:$0.requested)?.title.lowercased() }.count
-        let times = records.map(\.activeSeconds).sorted()
-        let median:Double = times.isEmpty ? 0 : times.count % 2 == 1 ? times[times.count/2] : (times[times.count/2-1]+times[times.count/2])/2
-        let alert = NSAlert(); alert.messageText = "Your Patches statistics"
-        alert.informativeText = "\(records.count) puzzles solved\nMedian active time: \(Int(median)) seconds\n\(records.filter { $0.hints == 0 }.count) solved without hints\nDifficulty matched: \(matched) of \(rated.count) rated games\n\nLearning uses active time, corrections, hesitation, hints, and resets. Forecasts are estimates; your Patches history stays separate from Zip."
-        alert.beginSheetModal(for:window)
+        picker.isHidden = true
+        statisticsScreen.show(records:snapshot.records)
+        window.makeFirstResponder(statisticsScreen)
     }
 }

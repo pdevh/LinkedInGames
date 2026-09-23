@@ -48,15 +48,24 @@ fold. A candidate qualifies for Easy at estimated P(Easy) >= 85% and P(Hard) <= 
 Medium and Hard use 70% for their requested outcome. Qualifying candidates outrank
 nonqualifying candidates, then expected utility decides among them.
 
-When the initial pool does not qualify, generate up to three additional batches of
-six candidates. For Easy these are 5×5 boards with maximum checkpoint gaps of 4,
-3, then 2, and respectively 25%, 50%, then 75% of remaining off-solution edges
-blocked. Added clues retain existing checkpoints in order. Both changes only add
-constraints, preserving the base puzzle's unique solution. Generator version is 4.
+Fresh Easy players receive 5×5 boards with at most six clues, a checkpoint gap of
+at least five cells, and at least two legal wrong-turn opportunities along the
+solution. With fewer than eight valid solves, selection aims for moderate predicted
+effort rather than the lowest possible effort. This structural floor remains until
+repeated Easy outcomes show difficulty: at least three Easy solves among the latest
+12 valid games with mean measured effort of at least 0.8.
+
+When that evidence exists and the initial pool does not qualify, generate up to
+three additional batches of six candidates. For Easy these are 5×5 boards with
+maximum checkpoint gaps of 4, 3, then 2, and respectively 25%, 50%, then 75% of
+remaining off-solution edges blocked. Added clues retain existing checkpoints in
+order. Both changes only add constraints, preserving the base puzzle's unique
+solution. Generator version is 4.
 Medium and Hard expand with additional boards of their respective generator preset.
 Previously played paths remain excluded.
 
-The search is bounded at 36 candidates in normal operation. If no candidate
+The search is bounded at 36 candidates when extra guidance is warranted, and
+18 candidates for a fresh Easy player. If no candidate
 qualifies, return the candidate with the best utility; do not claim that its target
 was met. New structures require real play before their probabilities can be
 validated. Every completed, valid game updates subsequent fits automatically.

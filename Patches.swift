@@ -118,7 +118,9 @@ struct PatchesPuzzle: Codable, Equatable {
             // Refinement terminates at singleton cells, so no unverified fallback board is needed.
             if let i = regions.indices.filter({ regions[$0].area > 1 }).randomElement(using:&rng) { split(i) }
         }
-        let attempts = [0,3,8][difficulty.rawValue]
+        // A fully specified Easy tiling can amount to copying the badges.
+        // Try a few safe omissions; retain only uniquely solvable boards.
+        let attempts = [4,3,8][difficulty.rawValue]
         for i in puzzle.clues.indices.shuffled(using:&rng).prefix(attempts) {
             let original = puzzle.clues[i]
             if Bool.random(using:&rng) { puzzle.clues[i].area = nil } else { puzzle.clues[i].shape = .any }
@@ -167,6 +169,7 @@ struct PatchesModel {
     var weights = [Double](repeating:0,count:7)
     var targets = [0.25,0.65,1.15]
     var count = 0
+    private(set) var needsEasyGuidance = false
     var evidence: [(x:[Double], residual:Double, weight:Double)] = []
     static func prior(_ x:[Double]) -> Double { max(0.08, 0.1+0.25*x[1]+0.8*x[3]+0.35*x[4]-0.3*x[2]) }
     init(_ records:[PatchesRecord]) {
@@ -174,6 +177,9 @@ struct PatchesModel {
         let valid = records.reversed().filter { seen.insert($0.id).inserted && $0.effort != nil }.prefix(200)
         count = valid.count
         guard count > 0 else { return }
+        let recentEasy = valid.prefix(12).filter { $0.requested == Difficulty.easy.rawValue }
+        needsEasyGuidance = recentEasy.count >= 3 &&
+            recentEasy.reduce(0.0) { $0 + $1.effort! } / Double(recentEasy.count) >= 0.8
         let rows = valid.enumerated().map { age,r in (r.puzzle.features,r.effort!,pow(0.5,Double(age)/60)*(r.hints > 0 ? 0.65 : 1)) }
         let total = rows.reduce(0) { $0+$1.2 }
         let ordered = rows.sorted { $0.1 < $1.1 }
@@ -231,8 +237,20 @@ struct PatchesModel {
             if !excluding.contains(p) { pool.append(p) }
         } }
         if pool.isEmpty { pool.append(PatchesPuzzle.make(d,using:&rng)) }
-        return pool.max { a,b in
+        let eligible: [PatchesPuzzle]
+        if d == .easy && !needsEasyGuidance {
+            let small = pool.filter { $0.size == Difficulty.easy.size }
+            let engaging = small.filter { p in
+                p.clues.contains { $0.area == nil || $0.shape == .any } &&
+                    p.candidates().filter { $0.count > 1 }.count >= 2
+            }
+            eligible = engaging.isEmpty ? (small.isEmpty ? pool : small) : engaging
+        } else { eligible = pool }
+        return eligible.max { a,b in
             let fa = forecast(a), fb = forecast(b)
+            if d == .easy && count < 8 && !needsEasyGuidance {
+                return abs(fa.effort-0.65) > abs(fb.effort-0.65)
+            }
             if fa.qualifies(d) != fb.qualifies(d) { return !fa.qualifies(d) }
             // Until data arrives, rank by distance from a structural target.
             if count == 0 { return abs(fa.effort-targets[d.rawValue]) > abs(fb.effort-targets[d.rawValue]) }

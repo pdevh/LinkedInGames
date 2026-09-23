@@ -47,6 +47,15 @@ no cold-start confidence is claimed. If no candidate qualifies, the best availab
 candidate is used. These estimates require real-player validation, and are not
 guaranteed difficulty match rates. Assessments use frozen pre-play boundaries.
 
+Easy generation attempts to omit up to four area or shape constraints, accepting
+an omission only if the tiling stays unique. Fresh Easy selection favors 5×5 boards
+with at least one omitted constraint and at least two clues that permit multiple
+individual rectangles. During the first seven valid solves, selection targets
+moderate predicted effort instead of the lowest possible effort. If at least three
+of the latest 12 valid Easy solves average effort of 0.8 or more, Easy can draw from
+the full pool and prioritize easier outcomes. This retains a gentler path for
+players who need it.
+
 Statistics show solved count, median active time, unassisted solves and observed
 difficulty matches. History is saved in the existing atomic snapshot and backup;
 the optional Patches field preserves compatibility with earlier Zip snapshots.

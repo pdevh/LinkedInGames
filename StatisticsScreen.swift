@@ -12,10 +12,9 @@ final class StatisticsScreen: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.965, alpha: 1).cgColor
+        layer?.backgroundColor = GameUIStyle.background.cgColor
         close.target = self; close.action = #selector(closeScreen)
-        close.isBordered = false; close.font = .systemFont(ofSize: 14, weight: .semibold)
-        close.contentTintColor = NSColor(calibratedRed: 0.12, green: 0.28, blue: 0.86, alpha: 1)
+        GameUIStyle.button(close)
         period.selectedSegment = 0; period.target = self; period.action = #selector(changePeriod)
         period.font = .systemFont(ofSize: 13, weight: .semibold)
         scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true

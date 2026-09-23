@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 func runPatchesTests() {
     let snapPuzzle = PatchesPuzzle(size: 4, clues: [
@@ -19,6 +19,17 @@ func runPatchesTests() {
     precondition(snap(Cell(x:1,y:1),-0.12,0.3) == topLeft, "Reverse drags at board edge must work")
     precondition(snap(Cell(x:2,y:2),4.12,3.8) == bottomRight, "Slight release outside board must place")
     precondition(snap(Cell(x:2,y:2),4.5,3.8,bottomRight) == nil)
+    // Active drags clip distant pointer coordinates before selection, including
+    // the final mouse-up point after the cursor has left the window.
+    let playable = NSRect(x:8,y:8,width:400,height:400)
+    func snappedOutside(_ anchor:Cell, _ point:NSPoint) -> PatchRect? {
+        let clipped = BoardDrag.clamped(point,to:playable)
+        return snap(anchor,Double((clipped.x-playable.minX)/100),Double((clipped.y-playable.minY)/100))
+    }
+    precondition(snappedOutside(Cell(x:2,y:2),NSPoint(x:1000,y:380)) == bottomRight,
+                 "Release far outside the board must resolve to its edge")
+    precondition(snappedOutside(Cell(x:1,y:1),NSPoint(x:-500,y:-500)) == topLeft,
+                 "Reverse drags remain selectable beyond the window")
     let obstruction = PatchRect(x:1,y:0,width:2,height:2)
     precondition(PatchSelection.resolve(anchor:Cell(x:0,y:0),x:2.1,y:1.8,puzzle:snapPuzzle,placed:[obstruction],previous:topLeft) == nil)
     let wildcard = PatchesPuzzle(size:3,clues:[PatchClue(cell:Cell(x:0,y:0),area:nil,shape:.any)],solution:[])
@@ -90,6 +101,24 @@ func runPatchesTests() {
         precondition(abs(f.probabilities.reduce(0,+)-1) < 1e-10)
     }
     precondition(!PatchesModel([]).forecast(puzzle).qualifies(.easy))
+    for seed in 700..<720 {
+        var firstRandom = PuzzleRandom(seed: UInt64(seed))
+        let firstEasy = PatchesModel([]).select(.easy,excluding:[],using:&firstRandom)
+        precondition(firstEasy.size == 5 && firstEasy.complete(firstEasy.solution))
+        precondition(firstEasy.clues.contains { $0.area == nil || $0.shape == .any })
+        precondition(firstEasy.candidates().filter { $0.count > 1 }.count >= 2,
+                     "Cold-start Easy must require choosing rectangle bounds")
+    }
+    precondition(!PatchesModel([]).needsEasyGuidance)
+    var struggling = [PatchesRecord]()
+    for _ in 0..<4 {
+        var r = record(hard:true)
+        r = PatchesRecord(id:r.id,puzzle:r.puzzle,requested:Difficulty.easy.rawValue,
+                          activeSeconds:r.activeSeconds,corrections:r.corrections,hints:r.hints,
+                          resets:r.resets,intervals:r.intervals,solved:r.solved)
+        struggling.append(r)
+    }
+    precondition(PatchesModel(struggling).needsEasyGuidance)
     let restoredRecords = try! JSONDecoder().decode([PatchesRecord].self,from:JSONEncoder().encode(easy))
     precondition(PatchesModel(restoredRecords).weights == a.weights)
     let oldSnapshot = Data("{\"progress\":{},\"records\":[]}".utf8)

@@ -54,6 +54,24 @@ extension Puzzle {
 }
 
 func runAdaptiveRegressionTests() {
+    let dragBoard = BoardView(frame: NSRect(x: 0, y: 0, width: 318, height: 318))
+    let dragStart = Cell(x: 0, y: 1)
+    dragBoard.puzzle = Puzzle(size: 3, solution: [dragStart], clues: [dragStart: 1], walls: [])
+    dragBoard.path = [dragStart]
+    let firstPoint = NSPoint(x: 57, y: 159)
+    let rightEdge = dragBoard.traceDrag(from: firstPoint, to: NSPoint(x: 450, y: 159))
+    precondition(dragBoard.path == [dragStart, Cell(x: 1, y: 1), Cell(x: 2, y: 1)],
+                 "Dragging beyond the board must extend the path to its edge")
+    _ = dragBoard.traceDrag(from: rightEdge, to: NSPoint(x: 450, y: -100))
+    precondition(dragBoard.path == [dragStart, Cell(x: 1, y: 1), Cell(x: 2, y: 1), Cell(x: 2, y: 0)],
+                 "An outside orthogonal move must continue from the clipped edge")
+    dragBoard.puzzle = Puzzle(size: 3, solution: [dragStart], clues: [dragStart: 1],
+                              walls: [Edge(Cell(x: 1, y: 1), Cell(x: 2, y: 1))])
+    dragBoard.path = [dragStart]
+    _ = dragBoard.traceDrag(from: firstPoint, to: NSPoint(x: 450, y: 159))
+    precondition(dragBoard.path == [dragStart, Cell(x: 1, y: 1)],
+                 "Overshoot must stop at a wall")
+
     func fixture(_ size: Int) -> Puzzle {
         let path = (0..<size).flatMap { y in
             (0..<size).map { x in Cell(x: y.isMultiple(of: 2) ? x : size-1-x, y: y) }
@@ -137,6 +155,17 @@ func runAdaptiveRegressionTests() {
     let restoredVerdict = try! JSONDecoder().decode(PlayStatistics.self, from: JSONEncoder().encode(moderate))
     precondition(restoredVerdict.experiencedDifficulty == "medium")
     let initial = AdaptiveDifficulty(records: [])
+    for _ in 0..<20 {
+        let firstEasy = initial.select(.easy, excluding: [])
+        let firstFeatures = PlayStatistics.extractFeatures(firstEasy)
+        precondition(firstEasy.size == 5 && firstEasy.clues.count <= 6)
+        precondition((firstFeatures["maxCheckpointGap"] ?? 0) >= 5 &&
+                     AdaptiveDifficulty.openChoices(firstEasy) >= 2,
+                     "Cold-start Easy must leave meaningful route choices")
+    }
+    precondition(!initial.needsEasyGuidance)
+    precondition(AdaptiveDifficulty(records: (0..<4).map { _ in record(a, difficult: true, label: .easy) }).needsEasyGuidance,
+                 "Repeated difficult Easy solves should unlock more guidance")
     let first = AdaptiveDifficulty(records: [record(a, difficult: false)])
     precondition(first.predict(a) < initial.predict(a), "Learning must begin on the first solve")
     precondition(AdaptiveDifficulty(records: Array(repeating: training[0], count: 200)).sampleCount == 1)

@@ -14,7 +14,9 @@ trackpad haptics, persistent progress, and personalized difficulty.
 
 Download and unzip the macOS app from Releases, then open `LinkedInGames.app`.
 The provided build is for Apple Silicon and requires macOS 13 or later. It is
-ad-hoc signed, not Apple-notarized.
+ad-hoc signed, not Apple-notarized. Updater-enabled releases check GitHub
+Releases and prompt before installing new signed versions. See
+[update and release instructions](UPDATES.md).
 
 ## Build and test
 
@@ -26,8 +28,8 @@ LinkedInGames.app/Contents/MacOS/LinkedInGames --self-test
 open LinkedInGames.app
 ```
 
-The build uses Swift and AppKit without third-party dependencies. Releases are
-built and uploaded manually; no CI/CD is configured.
+The build uses Swift, AppKit, and the pinned Sparkle updater framework.
+Releases are built and uploaded manually; no CI/CD is configured.
 
 Command–0 opens the game library, Command–1 opens Zip, and Command–2 opens Patches.
 Both games run in one window. Existing Zip progress remains compatible: the
