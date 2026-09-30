@@ -67,7 +67,10 @@ final class DifficultyJournal {
     @discardableResult
     func append(eventID: UUID = UUID(), terminal: (serveID: UUID, game: String, snapshot: Data)? = nil,
                 encode: (Int64, UUID) throws -> Data) throws -> String {
-        try writer.sync { try transaction {
+        try writer.sync { try transaction { try appendInTransaction(eventID:eventID,terminal:terminal,encode:encode) } }
+    }
+    private func appendInTransaction(eventID: UUID = UUID(), terminal: (serveID: UUID, game: String, snapshot: Data)? = nil,
+                                     encode: (Int64,UUID) throws -> Data) throws -> String {
             if let terminal {
                 var existing: String?
                 try statement("SELECT event_id FROM terminals WHERE serve_id=?") { p in
@@ -98,7 +101,55 @@ final class DifficultyJournal {
                 }
             }
             return eventID.uuidString
+    }
+    struct Lost: Codable {
+        let eventID: String
+        let sequence: Int64
+        let bytes: Int
+        let serveID: String?
+        let kind: String?
+    }
+    /// Eviction and its manifest commit together. Exact tombstone hashes still permit
+    /// a receipt already in flight to reconcile after payload eviction.
+    func enforcePendingLimit(bytes: Int = 256*1024*1024, reserve: Int = 4*1024*1024,
+                             encodeLoss: ([Lost],Int64,UUID) throws -> Data) throws -> Int {
+        try writer.sync { try transaction {
+            var total: Int64 = 0
+            try statement("SELECT COALESCE(SUM(length(CAST(e.payload AS BLOB))),0) FROM events e JOIN outbox o USING(event_id)") { p in
+                guard sqlite3_step(p) == SQLITE_ROW else { throw error() }; total = sqlite3_column_int64(p,0)
+            }
+            guard total > bytes-reserve else { return 0 }
+            var lost: [Lost] = []
+            try statement("SELECT e.event_id,e.sequence,e.payload FROM events e JOIN outbox o USING(event_id) LEFT JOIN terminals t USING(event_id) WHERE t.event_id IS NULL AND e.quarantine IS NULL ORDER BY e.sequence LIMIT 1000") { p in
+                while sqlite3_step(p) == SQLITE_ROW && total > bytes-reserve {
+                    let payload = String(cString:sqlite3_column_text(p,2))
+                    let object = (try? JSONSerialization.jsonObject(with:Data(payload.utf8))) as? [String:Any]
+                    if ["loss","recovery","captureGap"].contains(object?["kind"] as? String ?? "") { continue }
+                    lost.append(Lost(eventID:String(cString:sqlite3_column_text(p,0)),sequence:sqlite3_column_int64(p,1),bytes:payload.utf8.count,
+                                     serveID:object?["serveID"] as? String,kind:object?["kind"] as? String))
+                    total -= Int64(payload.utf8.count)
+                }
+            }
+            guard !lost.isEmpty else { return 0 }
+            _ = try appendInTransaction { sequence,id in try encodeLoss(lost,sequence,id) }
+            for row in lost {
+                try statement("DELETE FROM outbox WHERE event_id=?") { p in bind(row.eventID,1,p); try done(p) }
+                try statement("UPDATE events SET payload='',quarantine='evictedWithManifest' WHERE event_id=?") { p in bind(row.eventID,1,p); try done(p) }
+            }
+            return lost.count
         } }
+    }
+    func setMetadata(_ key: String, value: String) throws {
+        try writer.sync { try statement("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value") { p in
+            bind(key,1,p); bind(value,2,p); try done(p)
+        } }
+    }
+    func metadata(_ key: String) throws -> String? {
+        try writer.sync {
+            var value: String?
+            try statement("SELECT value FROM metadata WHERE key=?") { p in bind(key,1,p); if sqlite3_step(p) == SQLITE_ROW { value = String(cString:sqlite3_column_text(p,0)) } }
+            return value
+        }
     }
     func pending(limit: Int = 500, now: Date = Date()) throws -> [Pending] {
         try writer.sync {

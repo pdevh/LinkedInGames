@@ -854,7 +854,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             showSuccessPanel()
         }
     }
-    func applicationWillTerminate(_ notification: Notification) { patchesController?.flush(); saveProgress(); store?.flush() }
+    func applicationWillTerminate(_ notification: Notification) { patchesController?.flush(); saveProgress(); store?.flush(); store?.telemetry?.close() }
     func applicationDidResignActive(_ notification: Notification) {
         if !startScreen && !loading && !progress.completed && startedAt != nil { pauseGame() }
         activeGap = 0; lastStatisticsTick = Date(); saveProgress()
@@ -1370,6 +1370,7 @@ if CommandLine.arguments.contains("--telemetry-crash-writer") {
 } else if CommandLine.arguments.contains("--self-test") {
     try runTelemetryJournalTests()
     try runTelemetryCrashTest()
+    try runTelemetryOverflowTest()
     runPatchesTests()
     runAdaptiveRegressionTests()
     precondition(HintPolicy.wait(active: 0, next: nil) == 30)

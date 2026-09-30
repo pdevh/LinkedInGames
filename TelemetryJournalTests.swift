@@ -57,3 +57,18 @@ func runTelemetryCrashTest() throws {
     for (index,row) in pending.enumerated() { precondition(row.sequence == Int64(index+1)) }
     print("Telemetry SIGKILL recovery: \(pending.count) committed transactions retained")
 }
+
+func runTelemetryOverflowTest() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:folder) }
+    let journal = try DifficultyJournal(url:folder.appendingPathComponent("overflow.sqlite"))
+    for _ in 0..<20 { try journal.append { _,_ in Data(String(repeating:"x",count:1000).utf8) } }
+    let lost = try journal.enforcePendingLimit(bytes:10_000,reserve:1000) { rows,sequence,id in
+        precondition(!rows.isEmpty)
+        return try JSONSerialization.data(withJSONObject:["kind":"loss","sequence":sequence,"lostIDs":rows.map(\.eventID)])
+    }
+    let pending = try journal.pending()
+    precondition(lost == 11 && pending.count == 10)
+    precondition(pending.last!.payload.contains("lostIDs"))
+    print("Telemetry overflow: evictions and loss manifest reconciled")
+}
