@@ -1,0 +1,15 @@
+name: macOS verification
+on:
+  push:
+    branches: [codex/dev-difficulty-telemetry]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AppKit app
+        run: ./build.sh
+      - name: Native regression suite
+        run: LinkedInGames.app/Contents/MacOS/LinkedInGames --self-test

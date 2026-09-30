@@ -5,3 +5,10 @@ Zip.app/
 *~
 
 LinkedInGames.app/
+__pycache__/
+.venv/
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+server/runtime/

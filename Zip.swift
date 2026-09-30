@@ -1348,6 +1348,7 @@ if CommandLine.arguments.contains("--render-games") {
     let controller = PatchesController(store: store)
     try controller.renderPreview(to: URL(fileURLWithPath: CommandLine.arguments.last!))
 } else if CommandLine.arguments.contains("--self-test") {
+    try runTelemetryJournalTests()
     runPatchesTests()
     runAdaptiveRegressionTests()
     precondition(HintPolicy.wait(active: 0, next: nil) == 30)
