@@ -258,6 +258,7 @@ struct AdaptiveDifficulty {
                 evaluationSeconds:ProcessInfo.processInfo.systemUptime-evaluation,preset:preset.rawValue))
         }
         func finish(_ puzzle: Puzzle) -> Puzzle {
+            decision.expectedCandidateCount = decision.candidates.count
             decision.generationEndedAt = Date(); decision.selectedID = CandidateDecision.content(puzzle).0
             decision.qualified = forecast(puzzle).qualifies(difficulty)
             let cold = difficulty == .easy && sampleCount < 8 && !needsEasyGuidance

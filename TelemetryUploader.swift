@@ -12,6 +12,7 @@ final class TelemetryUploader {
     private(set) var lastStatus = "Offline"
     init(journal: DifficultyJournal, directory: URL) throws {
         self.journal = journal; self.directory = directory; identity = try TelemetryIdentity.load()
+        if identity.enrollmentKey == nil { identity.enrollmentKey = UUID().uuidString + UUID().uuidString; try identity.save() }
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
     }
     func wake() { queue.async { self.start() } }
@@ -57,7 +58,7 @@ final class TelemetryUploader {
         var request = URLRequest(url:endpoint.appendingPathComponent("v1/installations"))
         request.httpMethod = "POST"; request.timeoutInterval = 30
         request.setValue("application/json",forHTTPHeaderField:"Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject:["installationID":identity.installationID.uuidString])
+        request.httpBody = try? JSONSerialization.data(withJSONObject:["installationID":identity.installationID.uuidString,"enrollmentKey":identity.enrollmentKey!])
         URLSession.shared.dataTask(with:request) { data,response,error in
             self.queue.async {
                 defer { self.busy = false }
@@ -99,7 +100,10 @@ final class TelemetryUploader {
             failures += 1
             if http?.statusCode == 413 { limit = max(1,limit/2) }
             // Never re-enroll as a new installation or discard immutable old IDs on 401.
-            if http?.statusCode == 401 { lastStatus = "Credential repair required; queue retained" }
+            if http?.statusCode == 401 {
+                identity.credential = nil; try identity.save()
+                lastStatus = "Credential recovery queued; event identity retained"
+            }
             else { lastStatus = "Retry queued (\(http?.statusCode ?? 0))" }
             let ceiling = min(3600,5*pow(2,Double(min(failures-1,10))))
             var delay = Double.random(in:0...ceiling)

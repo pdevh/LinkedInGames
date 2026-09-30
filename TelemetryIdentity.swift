@@ -15,6 +15,7 @@ struct TelemetryConsent: Codable {
 struct TelemetryIdentity: Codable {
     var installationID: UUID
     var credential: String?
+    var enrollmentKey: String?
     static func load() throws -> Self {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "local.philipp.zipgame.telemetry", kSecAttrAccount as String: "installation",
@@ -23,7 +24,7 @@ struct TelemetryIdentity: Codable {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data { return try JSONDecoder().decode(Self.self, from: data) }
         guard status == errSecItemNotFound else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
-        let identity = Self(installationID: UUID(), credential: nil)
+        let identity = Self(installationID: UUID(), credential: nil, enrollmentKey: UUID().uuidString + UUID().uuidString)
         try identity.save(); return identity
     }
     func save() throws {

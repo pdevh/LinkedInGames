@@ -48,3 +48,22 @@ Retention target: raw 180 days, derived 365; validate storage projections first.
 Do not deploy automatic deletes until retention manifests and frozen research
 snapshot ownership are configured. Independent upload rollback retains local queue;
 collector shutdown does not require any model/timing rollback.
+
+## Observed local staging results
+
+2026-09-30: TLS listener on 127.0.0.1:8941, self-signed localhost certificate
+explicitly trusted by test client (verification enabled). Certificate/key and PID/log
+are in the external staging state directory. Start with
+`.venv/bin/python server/start_staging.py`; do not start a second listener. Stop only
+the PID recorded there after verifying it is this collector process.
+
+`python -m server.staging_reconcile` reconciled 100 synthetic attempts, 300 events,
+3 installations, both games, 12 requests including duplicates and ignored receipts.
+Largest request ~70 KB; maximum receipt 0.0712s. Candidate fixtures are skeletal:
+these sizes do NOT represent full native candidate payloads or forecast capacity.
+Frozen JSONL/report saved outside Git beside staging state. Reproduce with
+`analysis/central/report.py`. Native candidate payload measurements remain required.
+
+`server/restore_drill.py` restores a local pg_dump into a newly named database and
+compares all raw-event hashes plus receipt bodies. It never drops the active staging
+database. This drill does not satisfy encrypted off-host backup/RPO acceptance.

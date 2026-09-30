@@ -70,6 +70,9 @@ async def enroll(request: Request):
     data = await body(request)
     try:
         installation = uuid(data['installationID'])
+        enrollment_key = data.get('enrollmentKey')
+        if request.url.path == '/v1/installations' and (not isinstance(enrollment_key,str) or not 32 <= len(enrollment_key) <= 200):
+            raise ValueError('enrollmentKey')
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, 'installationID')
     # Trust socket address only, not caller-controlled forwarding headers.
@@ -83,8 +86,10 @@ async def enroll(request: Request):
                 window_start=CASE WHEN enrollment_limits.window_start < now()-interval '1 hour' THEN now() ELSE enrollment_limits.window_start END
                 RETURNING count''', (address,)).fetchone()[0]
             if count <= 30:
-                row = db.execute('INSERT INTO installations(id,credential_hash) VALUES(%s,%s) ON CONFLICT DO NOTHING RETURNING id',
-                                 (installation,digest(token))).fetchone()
+                row = db.execute('''INSERT INTO installations(id,credential_hash,enrollment_key_hash) VALUES(%s,%s,%s)
+                    ON CONFLICT(id) DO UPDATE SET credential_hash=EXCLUDED.credential_hash
+                    WHERE installations.enrollment_key_hash=EXCLUDED.enrollment_key_hash AND NOT installations.disabled
+                    RETURNING id''', (installation,digest(token),digest(enrollment_key))).fetchone()
             else:
                 row = None
         if count > 30:
@@ -121,6 +126,8 @@ async def ingest(request: Request):
             raise HTTPException(422, 'unknownSchema')
         if not isinstance(entries,list) or not 1 <= len(entries) <= 500:
             raise HTTPException(413, 'eventCount')
+        if not all(isinstance(e,dict) and isinstance(e.get('sha256'),str) for e in entries):
+            raise HTTPException(400, 'entryEnvelope')
         if digest(''.join(e['sha256'] for e in entries)) != data['checksum']:
             raise HTTPException(400, 'batchChecksum')
     except (KeyError, TypeError, ValueError):

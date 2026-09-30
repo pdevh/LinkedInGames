@@ -37,3 +37,26 @@ Plan estimate remains 23–37 developer days plus production staging; revise usi
 measured acceptance progress. Off-host backup destination and human accessibility
 verification are not yet established. Do not activate production collection on
 synthetic tests alone.
+
+## Evidence checkpoint 1
+
+Implemented and pushed: versioned wire contract; WAL/FULL serialized Swift journal;
+atomic event/outbox, exact-hash acknowledgments, idempotent terminals; initial
+consent-aware controller hooks and JSON terminal recovery; Patches timestamps and
+replacement skips; candidate decision capture; persisted HTTPS upload batches;
+PostgreSQL raw migration, credential enrollment/rotation, mixed-batch quarantine,
+durable receipts and local TLS staging; deterministic initial quality report.
+
+Verified: macOS hosted Actions build and native tests at 47ff91e (run 36730928323),
+including basic journal restart/rollback/hash checks. PostgreSQL tests initially
+5 passed; 100-attempt protocol-only synthetic TLS reconciliation has 300 identical
+central ID/hash rows, 3 installations, zero report gaps, max receipt 0.0712s.
+Neither synthetic collector attempts nor native unit tests replace app UI acceptance.
+
+Remaining core gaps: complete semantic hooks and session/visibility handling;
+unknown-count interruption/loss manifests; measured bounded queue retention; true
+full-pool native export/replay fixtures; uploader fault-injection coverage;
+terminal failure propagation; snapshot ordering/migration edge cases; full report
+metrics/forward baseline. Feedback, clocks, generation budgets and rollout controls
+are still pending. Off-host destination/production hostname requested, not yet
+configured. No broad milestone complete; estimate still 23–37 developer days.

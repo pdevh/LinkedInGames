@@ -21,7 +21,7 @@ def client():
 
 def enroll(client):
     installation = str(uuid4())
-    response = client.post('/v1/installations',json={'installationID':installation})
+    response = client.post('/v1/installations',json={'installationID':installation,'enrollmentKey':str(uuid4())})
     assert response.status_code == 200
     return installation, {'Authorization':'Bearer '+response.json()['credential']}
 
@@ -91,3 +91,14 @@ def test_out_of_order_and_checksum(client):
     data['checksum'] = 'bad'
     assert client.post('/v1/events/batch',json=data,headers=headers).status_code == 400
     assert client.get('/health').json()['status'] == 'ready'
+
+
+def test_lost_enrollment_ack_recoverable(client):
+    installation, proof = str(uuid4()), str(uuid4())
+    body = {'installationID':installation,'enrollmentKey':proof}
+    first = client.post('/v1/installations',json=body)
+    second = client.post('/v1/installations',json=body)
+    assert first.status_code == second.status_code == 200
+    assert client.post('/v1/installations',json={**body,'enrollmentKey':str(uuid4())}).status_code == 409
+    headers = {'Authorization':'Bearer '+second.json()['credential']}
+    assert client.post('/v1/events/batch',json=batch(installation,[event(installation)]),headers=headers).status_code == 200

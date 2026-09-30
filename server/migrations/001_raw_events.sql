@@ -1,7 +1,7 @@
 BEGIN;
 CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS installations(
- id uuid PRIMARY KEY, credential_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+ id uuid PRIMARY KEY, credential_hash text NOT NULL, enrollment_key_hash text, created_at timestamptz NOT NULL DEFAULT now(),
  disabled boolean NOT NULL DEFAULT false);
 CREATE TABLE IF NOT EXISTS raw_events(
  installation_id uuid NOT NULL REFERENCES installations(id), event_id uuid NOT NULL,

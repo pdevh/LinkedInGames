@@ -31,7 +31,9 @@ struct CandidateDecision: Codable {
     let targets: [Double]
     var trainingIDs: [UUID] = []
     var intent = "normal"
-    var expectedCandidateCount: Int { candidates.count }
+    var expectedCandidateCount = 0
+    var expectedChunks = 1
+    var chunkIndex = 0
     static func content<T: Encodable>(_ puzzle: T) -> (String,String) {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         // All puzzle types contain finite integers and enums; failure is a programmer error.

@@ -281,6 +281,7 @@ struct PatchesModel {
         for i in decision.candidates.indices where decision.candidates[i].eligible && !eligibleIDs.contains(decision.candidates[i].candidateID) {
             decision.candidates[i].eligible = false; decision.candidates[i].exclusionReason = "engagementFloor"
         }
+        decision.expectedCandidateCount = decision.candidates.count
         decision.selectedID = CandidateDecision.content(selected).0; decision.generationEndedAt = Date()
         decision.qualified = forecast(selected).qualifies(d)
         let cold = d == .easy && count < 8 && !needsEasyGuidance

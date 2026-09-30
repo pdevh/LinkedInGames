@@ -1339,7 +1339,9 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
 }
 
-if CommandLine.arguments.contains("--render-games") {
+if CommandLine.arguments.contains("--telemetry-crash-writer") {
+    try runTelemetryCrashWriter(url:URL(fileURLWithPath:CommandLine.arguments.last!))
+} else if CommandLine.arguments.contains("--render-games") {
     _ = NSApplication.shared
     NSApp.appearance = NSAppearance(named:.aqua)
     let output = URL(fileURLWithPath:CommandLine.arguments.last!,isDirectory:true)
@@ -1367,6 +1369,7 @@ if CommandLine.arguments.contains("--render-games") {
     try controller.renderPreview(to: URL(fileURLWithPath: CommandLine.arguments.last!))
 } else if CommandLine.arguments.contains("--self-test") {
     try runTelemetryJournalTests()
+    try runTelemetryCrashTest()
     runPatchesTests()
     runAdaptiveRegressionTests()
     precondition(HintPolicy.wait(active: 0, next: nil) == 30)

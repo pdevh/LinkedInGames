@@ -29,3 +29,31 @@ func runTelemetryJournalTests() throws {
     try journal!.append { sequence,_ in precondition(sequence == 2); return Data("{}".utf8) }
     print("Telemetry journal: recovery, atomic sequence, terminal idempotency and receipt hashes passed")
 }
+
+func runTelemetryCrashWriter(url: URL) throws {
+    let journal = try DifficultyJournal(url:url)
+    for i in 0..<100_000 {
+        try journal.append { sequence,_ in Data("{\"sequence\":\(sequence)}".utf8) }
+        if i == 9 {
+            FileHandle.standardOutput.write(Data("committed10\n".utf8))
+        }
+    }
+}
+
+func runTelemetryCrashTest() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:folder) }
+    let url = folder.appendingPathComponent("crash.sqlite")
+    let child = Process(), pipe = Pipe()
+    child.executableURL = URL(fileURLWithPath:CommandLine.arguments[0])
+    child.arguments = ["--telemetry-crash-writer",url.path]; child.standardOutput = pipe
+    try child.run()
+    let signal = pipe.fileHandleForReading.availableData
+    precondition(String(data:signal,encoding:.utf8)?.contains("committed10") == true)
+    kill(child.processIdentifier,SIGKILL); child.waitUntilExit()
+    let recovered = try DifficultyJournal(url:url)
+    let pending = try recovered.pending()
+    precondition(pending.count >= 10)
+    for (index,row) in pending.enumerated() { precondition(row.sequence == Int64(index+1)) }
+    print("Telemetry SIGKILL recovery: \(pending.count) committed transactions retained")
+}
