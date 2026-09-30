@@ -1187,7 +1187,9 @@ final class GameController: NSObject, NSApplicationDelegate {
         subtitle.stringValue = "Level \(progress.solved.count + 1)  ·  \(progress.solved.count) solved"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let model = preparedModel ?? AdaptiveDifficulty(records: records)
-            let generated = model.select(selected, excluding: previous)
+            var decision: CandidateDecision?
+            let generated = model.select(selected, excluding: previous) { decision = $0 }
+            decision?.trainingIDs = records.filter { AdaptiveDifficulty.effort($0) != nil }.suffix(200).map(\.id)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generationID == id else { return }
                 if self.recordsRevision == revision { self.cachedModel = model; self.cachedRevision = revision }
@@ -1201,7 +1203,10 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.progress.statistics?.difficultyTargets = model.targets
                 self.progress.statistics?.classificationModelVersion = AdaptiveDifficulty.version
                 self.progress.statistics?.classificationSamples = model.sampleCount
-                if let record = self.progress.statistics { self.store.telemetry?.record(game:"zip",serveID:record.id,kind:"serve",payload:record) }
+                if let record = self.progress.statistics {
+                    if let decision { self.store.telemetry?.record(game:"zip",serveID:record.id,kind:"candidateDecision",payload:decision) }
+                    self.store.telemetry?.record(game:"zip",serveID:record.id,kind:"serve",payload:record)
+                }
                 self.progress.path = []; self.progress.elapsed = 0
                 self.board.puzzle = generated
                 self.elapsed = 0; self.startedAt = nil

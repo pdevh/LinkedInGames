@@ -238,13 +238,26 @@ struct PatchesModel {
         }
         return AdaptiveDifficulty.Forecast(probabilities:probs.map { $0/total },effort:mean,support:total-1.5)
     }
-    func select(_ d:Difficulty, excluding:[PatchesPuzzle], using rng:inout PuzzleRandom) -> PatchesPuzzle {
+    func select(_ d:Difficulty, excluding:[PatchesPuzzle], using rng:inout PuzzleRandom, audit: ((CandidateDecision) -> Void)? = nil) -> PatchesPuzzle {
+        let began = Date()
+        var decision = CandidateDecision(decisionID:UUID(),generationStartedAt:began,generationEndedAt:began,requested:d.rawValue,candidates:[],weights:weights,targets:targets)
+        func observe(_ p:PatchesPuzzle, generation:Double, preset:Difficulty) {
+            let started = ProcessInfo.processInfo.systemUptime, x = p.features, f = forecast(p), content = CandidateDecision.content(p)
+            decision.candidates.append(CandidateObservation(candidateID:content.0,puzzleJSON:content.1,
+                rawFeatures:Dictionary(uniqueKeysWithValues:x.enumerated().map { ("feature\($0.offset)",$0.element) }),scaledFeatures:x,
+                structuralPrediction:Self.prior(x),unblendedPrediction:Self.prior(x)+zip(x,weights).reduce(0) { $0+$1.0*$1.1 },
+                blendedEffort:f.effort,probabilities:f.probabilities,support:f.support,eligible:!excluding.contains(p),
+                exclusionReason:excluding.contains(p) ? "previousPuzzle" : nil,generationSeconds:generation,
+                evaluationSeconds:ProcessInfo.processInfo.systemUptime-started,preset:preset.rawValue))
+        }
         var pool:[PatchesPuzzle] = []
         for _ in 0..<6 { for preset in Difficulty.allCases {
+            let started = ProcessInfo.processInfo.systemUptime
             let p = PatchesPuzzle.make(preset,using:&rng)
+            observe(p,generation:ProcessInfo.processInfo.systemUptime-started,preset:preset)
             if !excluding.contains(p) { pool.append(p) }
         } }
-        if pool.isEmpty { pool.append(PatchesPuzzle.make(d,using:&rng)) }
+        if pool.isEmpty { let p = PatchesPuzzle.make(d,using:&rng); observe(p,generation:0,preset:d); pool.append(p) }
         let eligible: [PatchesPuzzle]
         if d == .easy && !needsEasyGuidance {
             let small = pool.filter { $0.size == Difficulty.easy.size }
@@ -254,7 +267,7 @@ struct PatchesModel {
             }
             eligible = engaging.isEmpty ? (small.isEmpty ? pool : small) : engaging
         } else { eligible = pool }
-        return eligible.max { a,b in
+        let selected = eligible.max { a,b in
             let fa = forecast(a), fb = forecast(b)
             if d == .easy && count < 8 && !needsEasyGuidance {
                 return abs(fa.effort-0.65) > abs(fb.effort-0.65)
@@ -264,6 +277,17 @@ struct PatchesModel {
             if count == 0 { return abs(fa.effort-targets[d.rawValue]) > abs(fb.effort-targets[d.rawValue]) }
             return fa.utility(d,targets:targets) < fb.utility(d,targets:targets)
         }!
+        let eligibleIDs = Set(eligible.map { CandidateDecision.content($0).0 })
+        for i in decision.candidates.indices where decision.candidates[i].eligible && !eligibleIDs.contains(decision.candidates[i].candidateID) {
+            decision.candidates[i].eligible = false; decision.candidates[i].exclusionReason = "engagementFloor"
+        }
+        decision.selectedID = CandidateDecision.content(selected).0; decision.generationEndedAt = Date()
+        decision.qualified = forecast(selected).qualifies(d)
+        let cold = d == .easy && count < 8 && !needsEasyGuidance
+        decision.fallback = cold ? false : decision.qualified == false
+        decision.selectionReason = cold ? "coldStart" : decision.qualified == true ? "qualified" : "noEligible"
+        audit?(decision)
+        return selected
     }
     static func verdict(_ r:PatchesRecord) -> String? {
         guard let e = r.effort, let t = AdaptiveDifficulty.validTargets(r.targets) else { return nil }

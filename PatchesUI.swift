@@ -486,13 +486,16 @@ final class PatchesController: NSObject, NSWindowDelegate {
         let excluded = records.map(\.puzzle) + snapshot.sessions.values.map { $0.record.puzzle }
         DispatchQueue.global(qos:.userInitiated).async { [weak self] in
             var rng = PuzzleRandom(); let model = PatchesModel(records)
-            let puzzle = model.select(d,excluding:excluded,using:&rng)
+            var decision: CandidateDecision?
+            let puzzle = model.select(d,excluding:excluded,using:&rng) { decision = $0 }
+            decision?.trainingIDs = records.filter { $0.effort != nil }.suffix(200).map(\.id)
             var record = PatchesRecord(puzzle:puzzle,requested:d.rawValue)
             record.createdAt = Date(); record.timestampQuality = "observed"; record.outcome = "inProgress"
             record.targets = model.targets; record.forecast = model.forecast(puzzle).probabilities
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == token else { return }
                 record.firstVisibleAt = Date()
+                if let decision { self.store.telemetry?.record(game:"patches",serveID:record.id,kind:"candidateDecision",payload:decision) }
                 self.store.telemetry?.record(game:"patches",serveID:record.id,kind:"serve",payload:record)
                 self.session = PatchesSession(record:record); self.loading = false; self.restore(); self.save()
                 if self.isPresented && self.window.isKeyWindow && NSApp.isActive { self.togglePlay() }

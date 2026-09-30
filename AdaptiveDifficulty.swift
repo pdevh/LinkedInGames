@@ -243,15 +243,44 @@ struct AdaptiveDifficulty {
         }
         return best
     }
-    func select(_ difficulty: Difficulty, excluding previous: [[Cell]]) -> Puzzle {
+    func select(_ difficulty: Difficulty, excluding previous: [[Cell]], audit: ((CandidateDecision) -> Void)? = nil) -> Puzzle {
         let excluded = Set(previous)
+        let began = Date()
+        var decision = CandidateDecision(decisionID:UUID(),generationStartedAt:began,generationEndedAt:began,requested:difficulty.rawValue,candidates:[],weights:weights,targets:targets)
+        func observe(_ puzzle: Puzzle, generation: Double, preset: Difficulty) {
+            let evaluation = ProcessInfo.processInfo.systemUptime
+            let f = forecast(puzzle), x = Self.vector(puzzle), content = CandidateDecision.content(puzzle)
+            let raw = PlayStatistics.extractFeatures(puzzle).mapValues(Double.init)
+            decision.candidates.append(CandidateObservation(candidateID:content.0,puzzleJSON:content.1,rawFeatures:raw,scaledFeatures:x,
+                structuralPrediction:Self.prior(x),unblendedPrediction:Self.prior(x)+zip(x,weights).reduce(0) { $0+$1.0*$1.1 },
+                blendedEffort:f.effort,probabilities:f.probabilities,support:f.support,eligible:!excluded.contains(puzzle.solution),
+                exclusionReason:excluded.contains(puzzle.solution) ? "previousPath" : nil,generationSeconds:generation,
+                evaluationSeconds:ProcessInfo.processInfo.systemUptime-evaluation,preset:preset.rawValue))
+        }
+        func finish(_ puzzle: Puzzle) -> Puzzle {
+            decision.generationEndedAt = Date(); decision.selectedID = CandidateDecision.content(puzzle).0
+            decision.qualified = forecast(puzzle).qualifies(difficulty)
+            let cold = difficulty == .easy && sampleCount < 8 && !needsEasyGuidance
+            decision.fallback = cold ? false : decision.qualified == false
+            decision.selectionReason = cold ? "coldStart" : decision.qualified == true ? "qualified" : "noEligible"
+            audit?(decision); return puzzle
+        }
         // Three bounded workers, six candidates each. No quality-reducing early exit.
         let lock = NSLock()
         var batches = [[Puzzle]](repeating: [], count: 3)
+        var durations = [[Double]](repeating: [], count: 3)
         DispatchQueue.concurrentPerform(iterations: 3) { worker in
-            let candidates = (0..<6).map { _ in Puzzle.make(Difficulty.allCases[worker]) }
-            lock.lock(); batches[worker] = candidates; lock.unlock()
+            var times: [Double] = []
+            let candidates = (0..<6).map { _ -> Puzzle in
+                let start = ProcessInfo.processInfo.systemUptime
+                let puzzle = Puzzle.make(Difficulty.allCases[worker])
+                times.append(ProcessInfo.processInfo.systemUptime-start); return puzzle
+            }
+            lock.lock(); batches[worker] = candidates; durations[worker] = times; lock.unlock()
         }
+        for (worker,batch) in batches.enumerated() { for (index,puzzle) in batch.enumerated() {
+            observe(puzzle,generation:durations[worker][index],preset:Difficulty.allCases[worker])
+        } }
         var candidates = batches.flatMap { $0 }.filter { !excluded.contains($0.solution) }
         // Search beyond the first batch when it does not meet the requested level.
         // Easy gets progressively more guidance, not merely more random boards.
@@ -259,14 +288,17 @@ struct AdaptiveDifficulty {
             if difficulty == .easy && !needsEasyGuidance { break }
             if !candidates.isEmpty && forecast(choose(difficulty, from: candidates)).qualifies(difficulty) { break }
             for _ in 0..<6 {
+                let generatedAt = ProcessInfo.processInfo.systemUptime
                 var candidate = Puzzle.make(difficulty)
                 if difficulty == .easy && needsEasyGuidance { candidate = candidate.guided(maxGap: [4, 3, 2][round], blockedFraction: [0.25, 0.5, 0.75][round]) }
+                observe(candidate,generation:ProcessInfo.processInfo.systemUptime-generatedAt,preset:difficulty)
                 if !excluded.contains(candidate.solution) { candidates.append(candidate) }
             }
         }
-        if !candidates.isEmpty { return choose(difficulty, from: candidates) }
+        if !candidates.isEmpty { return finish(choose(difficulty, from: candidates)) }
         var fresh = Puzzle.make(difficulty)
-        while excluded.contains(fresh.solution) { fresh = Puzzle.make(difficulty) }
-        return fresh
+        observe(fresh,generation:0,preset:difficulty)
+        while excluded.contains(fresh.solution) { fresh = Puzzle.make(difficulty); observe(fresh,generation:0,preset:difficulty) }
+        return finish(fresh)
     }
 }

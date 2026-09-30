@@ -9,10 +9,16 @@ final class GameplayTelemetry {
     private var sessionID = UUID()
     private var lastForeground = Date()
     var lastError: Error?
+    private var uploader: TelemetryUploader?
+    private var uploadTimer: Timer?
     init(url: URL) throws {
         journal = try DifficultyJournal(url:url)
         identity = try TelemetryIdentity.load()
+        uploader = try TelemetryUploader(journal:journal,directory:url.deletingLastPathComponent().appendingPathComponent("telemetry-upload"))
+        uploader?.wake()
+        uploadTimer = Timer.scheduledTimer(withTimeInterval:30,repeats:true) { [weak self] _ in self?.uploader?.wake() }
     }
+    deinit { uploadTimer?.invalidate() }
     func foreground() {
         let now = Date()
         if now.timeIntervalSince(lastForeground) > 1800 {
@@ -44,6 +50,7 @@ final class GameplayTelemetry {
                     "versions":versions,"payload":object]
                 return try JSONSerialization.data(withJSONObject:event,options:[.sortedKeys])
             }
+            if terminal != nil { uploader?.wake() }
         } catch { lastError = error; NSLog("Difficulty journal write failed: %@", String(describing:error)) }
     }
     private static var architecture: String {

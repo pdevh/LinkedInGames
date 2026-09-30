@@ -29,7 +29,7 @@ mkdir -p LinkedInGames.app/Contents/MacOS LinkedInGames.app/Contents/Resources L
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFT_MODULECACHE_PATH="$PWD/.build/module-cache"
 cp Zip.swift .build/main.swift
-/usr/bin/swiftc -O -framework AppKit -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -lsqlite3 -emit-executable .build/main.swift UpdateService.swift GameUIStyle.swift GamesHome.swift PatchSelection.swift Patches.swift PatchesUI.swift PatchesTests.swift AdaptiveDifficulty.swift ProgressStore.swift DifficultyJournal.swift GameplayTelemetry.swift TelemetryIdentity.swift TelemetryJournalTests.swift RegressionTests.swift DifficultyToast.swift GameStatistics.swift StatisticsScreen.swift -o LinkedInGames.app/Contents/MacOS/LinkedInGames
+/usr/bin/swiftc -O -framework AppKit -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -lsqlite3 -emit-executable .build/main.swift UpdateService.swift GameUIStyle.swift GamesHome.swift PatchSelection.swift Patches.swift PatchesUI.swift PatchesTests.swift AdaptiveDifficulty.swift ProgressStore.swift DifficultyJournal.swift CandidateDecision.swift GameplayTelemetry.swift TelemetryUploader.swift TelemetryIdentity.swift TelemetryJournalTests.swift RegressionTests.swift DifficultyToast.swift GameStatistics.swift StatisticsScreen.swift -o LinkedInGames.app/Contents/MacOS/LinkedInGames
 cat > LinkedInGames.app/Contents/Info.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
