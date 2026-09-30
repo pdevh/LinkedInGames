@@ -53,6 +53,11 @@ including basic journal restart/rollback/hash checks. PostgreSQL tests initially
 central ID/hash rows, 3 installations, zero report gaps, max receipt 0.0712s.
 Neither synthetic collector attempts nor native unit tests replace app UI acceptance.
 
+Scale assumption: a handful of installations. Sustained synthetic throughput testing
+is intentionally omitted; use short correctness/retry smoke tests and measure actual
+payload/storage growth. A previously started 30-minute run was stopped after five
+minutes and is not acceptance evidence.
+
 Remaining core gaps: complete semantic hooks and session/visibility handling;
 unknown-count interruption/loss manifests; measured bounded queue retention; true
 full-pool native export/replay fixtures; uploader fault-injection coverage;

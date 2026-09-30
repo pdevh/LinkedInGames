@@ -53,6 +53,7 @@ def authenticate(db, request, installation):
         raise HTTPException(401, 'credential')
 
 
+@app.get('/')
 @app.get('/health')
 def health():
     try:
@@ -76,7 +77,14 @@ async def enroll(request: Request):
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, 'installationID')
     # Trust socket address only, not caller-controlled forwarding headers.
-    address = digest(request.client.host if request.client else 'unknown')
+    peer = request.client.host if request.client else 'unknown'
+    if peer in ('127.0.0.1','::1') and os.environ.get('TELEMETRY_TRUST_LOOPBACK_PROXY') == 'true':
+        import ipaddress
+        try:
+            peer = str(ipaddress.ip_address(request.headers.get('x-real-ip','')))
+        except ValueError:
+            raise HTTPException(400, 'proxyAddress')
+    address = digest(peer)
     token = secrets.token_urlsafe(32)
     try:
         with connect() as db:

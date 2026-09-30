@@ -1,4 +1,4 @@
-# Telemetry deployment — staging only
+# Telemetry deployment
 
 Inspected 2026-09-30: Ubuntu 22.04.5, 6 logical CPUs, 25 GiB RAM (~18 GiB
 available), 345 GiB filesystem (211 GiB free), no swap. Shared workloads include
@@ -26,10 +26,30 @@ collision quarantines without overwrite; valid events in mixed batches commit;
 unknown event schemas reject; out-of-order arrivals retain sequences; auth, token
 rotation, body-size and checksum validation pass. This is not a sustained load test.
 
-Provisional launch capacity: UNDECLARED pending representative payload and 30-minute
-2x-peak tests. Production activation prohibited until central/local reconciliation,
-real supported-Mac overhead, durable crash/retry, HTTPS and restore gates pass.
-No end-to-end HTTPS deployment or off-host backup is claimed yet.
+Expected launch scale is a handful of installations. Capacity is therefore checked
+with short request/retry smoke tests and representative payload measurements rather
+than a synthetic sustained-load exercise. Production activation remains prohibited
+until central/local reconciliation, real supported-Mac overhead, durable crash/retry,
+HTTPS and restore gates pass.
+Central endpoint: `https://telemetry.just-on-time.com`. Cloudflare proxies the A
+record to 37.114.42.231. Nginx terminates the origin connection with the Let's
+Encrypt certificate named `telemetry.just-on-time.com` and proxies only to
+127.0.0.1:8942. HTTP redirects to HTTPS; ACME challenge paths remain available.
+
+The central collector is a lingering user systemd service named
+`linkedgames-telemetry.service`, enabled for reboot. Its checkout is
+`/phil_services/linkedgames-telemetry`; its PostgreSQL 16.10 container is
+`linkedgames-telemetry-central-db`, bound only to 127.0.0.1:55440 with a dedicated
+volume and 768 MiB memory cap. It uses a restricted ingestion role; a separate
+read-only report role exists. Credentials live under
+`/home/phil_user/.config/linkedgames-telemetry-central/` with mode 0600 and are not
+in Git. Nginx limits request bodies to 512 KiB and trusts `CF-Connecting-IP` only
+from the current published Cloudflare address ranges.
+
+Verified through Cloudflare and directly against the origin with SNI: `/health`
+returned schemaVersion 1; HTTP returned a same-host HTTPS redirect; Nginx syntax
+passed. The origin certificate expires 2026-12-29. Cloudflare presents its own edge
+certificate to clients, as expected. Certbot installed its scheduled renewal.
 
 Production hostname and encrypted off-host backup destination requested from owner.
 Use a separate PostgreSQL role for ingestion with INSERT/SELECT only on raw tables;
@@ -63,6 +83,11 @@ Largest request ~70 KB; maximum receipt 0.0712s. Candidate fixtures are skeletal
 these sizes do NOT represent full native candidate payloads or forecast capacity.
 Frozen JSONL/report saved outside Git beside staging state. Reproduce with
 `analysis/central/report.py`. Native candidate payload measurements remain required.
+
+A planned 30-minute synthetic throughput run was stopped after five minutes at the
+owner's direction because the real user population fits on one hand. Its partial
+results are not used as acceptance evidence. Operational expectations and alerting
+must remain proportional to this small deployment.
 
 `server/restore_drill.py` restores a local pg_dump into a newly named database and
 compares all raw-event hashes plus receipt bodies. It never drops the active staging
