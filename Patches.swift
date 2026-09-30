@@ -108,7 +108,7 @@ struct PatchesPuzzle: Codable, Equatable {
             let eligible = regions.indices.filter { regions[$0].area > 2 }
             if let i = eligible.max(by: { regions[$0].area < regions[$1].area }) { split(i) }
         }
-        var puzzle: PatchesPuzzle
+        var puzzle = PatchesPuzzle(size:size, clues:[], solution:regions)
         while true {
             let clues = regions.map { r in PatchClue(cell: Cell(x: Int.random(in:r.x..<r.x+r.width,using:&rng), y:Int.random(in:r.y..<r.y+r.height,using:&rng)), area:r.area,
                 shape: r.width == r.height ? .square : r.width > r.height ? .wide : .tall) }
