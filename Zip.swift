@@ -622,6 +622,13 @@ enum HintPolicy {
     }
 }
 
+struct ZipActionSnapshot: Codable {
+    let action: String
+    let amount: Int
+    let path: [Cell]
+    let record: PlayStatistics?
+}
+
 struct SavedProgress: Codable {
     var statistics: PlayStatistics? = nil
     var solved: [Puzzle] = []
@@ -795,7 +802,7 @@ final class GameController: NSObject, NSApplicationDelegate {
         store.save()
     }
     private func archiveStatistics(outcome: String) {
-        guard var record = progress.statistics, record.startedAt != nil else { return }
+        guard var record = progress.statistics else { return }
         record.outcome = outcome; record.endedAt = Date()
         record.elapsedSeconds = progress.elapsed
         record.updateMeasurements()
@@ -803,6 +810,9 @@ final class GameController: NSObject, NSApplicationDelegate {
             let model = cachedRevision == recordsRevision ? cachedModel : nil
             let assessment = model ?? AdaptiveDifficulty(records: store.snapshot.records.filter { $0.id != record.id })
             record.experiencedDifficulty = assessment.experiencedDifficulty(for: record)?.title.lowercased()
+        }
+        if let data = try? JSONEncoder().encode(record) {
+            store.telemetry?.record(game:"zip",serveID:record.id,kind:outcome,payload:record,terminal:data)
         }
         progress.statistics = record
         var records = store.snapshot.records
@@ -942,6 +952,8 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.activeGap = 0
             }
             self.progress.statistics?.actions[action, default: 0] += amount
+            self.store.telemetry?.record(game:"zip",serveID:self.progress.statistics?.id,kind:action,
+                payload:ZipActionSnapshot(action:action,amount:amount,path:self.board.path,record:self.progress.statistics))
         }
         board.onProgress = { [weak self] count, total in
             self?.progressLabel.stringValue = "\(count) / \(total)"
@@ -1189,6 +1201,7 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.progress.statistics?.difficultyTargets = model.targets
                 self.progress.statistics?.classificationModelVersion = AdaptiveDifficulty.version
                 self.progress.statistics?.classificationSamples = model.sampleCount
+                if let record = self.progress.statistics { self.store.telemetry?.record(game:"zip",serveID:record.id,kind:"serve",payload:record) }
                 self.progress.path = []; self.progress.elapsed = 0
                 self.board.puzzle = generated
                 self.elapsed = 0; self.startedAt = nil

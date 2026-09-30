@@ -10,6 +10,7 @@ final class ProgressStore {
     let url: URL
     var snapshot: AppSnapshot
     var onError: ((Error) -> Void)?
+    private(set) var telemetry: GameplayTelemetry?
     private let queue = DispatchQueue(label: "zip.atomic-save", qos: .utility)
     init(url: URL) throws {
         self.url = url
@@ -28,6 +29,26 @@ final class ProgressStore {
                 snapshot.records = try JSONDecoder().decode([PlayStatistics].self, from: data)
             }
         }
+        // Telemetry failure must not prevent offline gameplay or legacy decoding.
+        do {
+            telemetry = try GameplayTelemetry(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite"))
+            for terminal in try telemetry!.journal.terminalSnapshots() {
+                if terminal.game == "zip", let record = try? JSONDecoder().decode(PlayStatistics.self, from:terminal.data) {
+                    snapshot.records.removeAll { $0.id == record.id }; snapshot.records.append(record)
+                    for key in Array(snapshot.progress.keys) where snapshot.progress[key]?.statistics?.id == record.id {
+                        snapshot.progress[key]?.statistics = record
+                        if record.outcome == "solved" { snapshot.progress[key]?.completed = true; snapshot.progress[key]?.path = record.puzzle.solution }
+                    }
+                } else if terminal.game == "patches", let record = try? JSONDecoder().decode(PatchesRecord.self, from:terminal.data) {
+                    if snapshot.patches == nil { snapshot.patches = PatchesSnapshot() }
+                    snapshot.patches?.records.removeAll { $0.id == record.id }; snapshot.patches?.records.append(record)
+                    for key in Array(snapshot.patches!.sessions.keys) where snapshot.patches?.sessions[key]?.record.id == record.id {
+                        snapshot.patches?.sessions[key]?.record = record
+                        if record.solved { snapshot.patches?.sessions[key]?.placed = record.puzzle.solution }
+                    }
+                }
+            }
+        } catch { NSLog("Difficulty recovery unavailable: %@", String(describing:error)) }
     }
     func save() {
         let captured = snapshot

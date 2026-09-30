@@ -132,6 +132,14 @@ struct PatchesPuzzle: Codable, Equatable {
 }
 
 struct PatchesRecord: Codable {
+    // Optional additions preserve legacy unknown timestamps during synthesized decoding.
+    var createdAt: Date?
+    var firstVisibleAt: Date?
+    var firstActionAt: Date?
+    var endedAt: Date?
+    var outcome: String?
+    var timestampQuality: String?
+
     var id = UUID()
     let puzzle: PatchesPuzzle
     let requested: Int

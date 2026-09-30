@@ -473,7 +473,14 @@ final class PatchesController: NSObject, NSWindowDelegate {
         difficulty = d; session = snapshot.sessions[String(d.rawValue)]; restore(); save()
     }
     @objc private func newPuzzle() {
-        if !paused { tick() }; pause(); loading = true; board.enabled = false; toast.dismiss(); refresh()
+        if !paused { tick() }; finishInterval()
+        if var discarded = session?.record, !discarded.solved, discarded.endedAt == nil {
+            discarded.endedAt = Date(); discarded.outcome = "skipped"
+            if let data = try? JSONEncoder().encode(discarded) { store.telemetry?.record(game:"patches",serveID:discarded.id,kind:"skipped",payload:discarded,terminal:data) }
+            snapshot.records.removeAll { $0.id == discarded.id }; snapshot.records.append(discarded)
+            session?.record = discarded
+        }
+        pause(); loading = true; board.enabled = false; toast.dismiss(); refresh()
         let token = UUID(); generation = token
         let d = difficulty, records = snapshot.records
         let excluded = records.map(\.puzzle) + snapshot.sessions.values.map { $0.record.puzzle }
@@ -481,9 +488,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
             var rng = PuzzleRandom(); let model = PatchesModel(records)
             let puzzle = model.select(d,excluding:excluded,using:&rng)
             var record = PatchesRecord(puzzle:puzzle,requested:d.rawValue)
+            record.createdAt = Date(); record.timestampQuality = "observed"; record.outcome = "inProgress"
             record.targets = model.targets; record.forecast = model.forecast(puzzle).probabilities
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == token else { return }
+                record.firstVisibleAt = Date()
+                self.store.telemetry?.record(game:"patches",serveID:record.id,kind:"serve",payload:record)
                 self.session = PatchesSession(record:record); self.loading = false; self.restore(); self.save()
                 if self.isPresented && self.window.isKeyWindow && NSApp.isActive { self.togglePlay() }
             }
@@ -506,12 +516,16 @@ final class PatchesController: NSObject, NSWindowDelegate {
         tick(); finishInterval()
         guard !paused, var s = session, !s.record.solved else { return }
         if pushUndo { s.undo.append(s.placed); if s.undo.count > 100 { s.undo.removeFirst() } }
+        if s.record.firstActionAt == nil { s.record.firstActionAt = Date() }
         s.record.corrections += corrections; s.placed = placed
         s.record.solved = s.record.puzzle.complete(placed)
         if s.record.solved {
+            s.record.endedAt = Date(); s.record.outcome = "solved"
             s.record.verdict = PatchesModel.verdict(s.record)
+            if let data = try? JSONEncoder().encode(s.record) { store.telemetry?.record(game:"patches",serveID:s.record.id,kind:"solved",payload:s.record,terminal:data) }
             snapshot.records.removeAll { $0.id == s.record.id }; snapshot.records.append(s.record)
         }
+        store.telemetry?.record(game:"patches",serveID:s.record.id,kind:"placement",payload:s)
         session = s; board.placed = placed; board.feedback(s.record.solved ? .levelChange : .alignment)
         status.stringValue = "\(placed.reduce(0) { $0+$1.area }) / \(s.record.puzzle.size*s.record.puzzle.size) cells filled"
         if s.record.solved { paused = true; toast.show(verdict:s.record.verdict,accent:.systemTeal) }
