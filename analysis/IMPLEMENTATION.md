@@ -1,5 +1,50 @@
 # Implementation acceptance ledger
 
+## October 1 cloud continuation: deployment handoff
+
+This continuation runs on isolated Debian Linux, not the VPS. `/phil_services`
+is absent. September 30 VPS observations below are inherited historical evidence;
+they were not reverified. The user instructed this continuation to supply an
+installer/docs for execution on the VPS rather than deploy there from this host.
+
+Origin verified, requested branch fetched explicitly, checkout fast-forwarded,
+and `a350224fa2373bcc91df92188e43f2f24bdc05f4` confirmed ancestor of HEAD. Existing
+tracked work was clean and preserved; no private historical audit is required.
+
+| Requirement / change | Files | Current evidence | Status |
+| --- | --- | --- | --- |
+| Strict wire types / retryable database outages / schema-aware health | `server/collector/{protocol,app}.py`, `server/tests/test_{protocol,collector}.py` | 28 backend/protocol/report/safety tests passed, zero skipped, native isolated PostgreSQL 17.11 | implemented and locally verified |
+| Portable isolated staging settings / prevent unintended truncation | `server/staging_settings.py`, test runner and helpers | refuse other hosts/ports/databases; external secret-path tests pass | implemented and locally verified |
+| VPS staging install and startup instructions | `server/install-vps.sh`, `server/VPS_INSTALL.md` | shell syntax check passed; missing `/phil_services` guard refused execution as intended | implemented; real Docker/systemd install blocked until execution on VPS |
+| TLS duplicate/lost-ACK reconciliation | `server/staging_reconcile.py` | 100 synthetic attempts, three installations, 300 exact central event ID/hash matches, 12 requests | locally verified protocol mechanics; full native-pool replay still pending |
+| Snapshot-consistent local restore | `server/restore_drill.py` | frozen snapshot and restored events/receipts/quarantine/credentials/migrations matched; 0.161 seconds, 129,012-byte dump in first successful local drill | locally verified on PostgreSQL 17.11; VPS PostgreSQL 16.10 and encrypted off-host recovery unverified |
+
+Cloud capacity only: five visible logical CPUs, ~33.3 GiB available RAM, ~30 GiB
+free workspace disk. Native PostgreSQL used port 55439, 32 MiB shared buffers,
+20 connections. TLS listener used port 8941 with explicitly trusted localhost
+certificate. Secrets/dumps/fixtures stayed under `/workspace/linkedgames-staging`
+outside Git. Docker Hub rate-limited the pinned image pull; the mirror was denied.
+Authoritative Debian 17.11 package downloads were checked against repository
+SHA-256 values. These cloud limits are not measured VPS limits or full-native
+candidate payload capacity.
+
+No broad activation milestone is complete. Mandatory client semantic capture,
+native complete-pool replay, uploader crash/fault coverage, feedback presentation
+and accessibility, honest UI metrics, versioned timing, generation cancellation/
+budget behavior, forward-validation reports and independent rollback remain as
+listed below. No fixed effort coefficient or production model changed here.
+macOS build/UI checks remain unverified: this machine has no macOS SDK and the
+GitHub Actions API returned Forbidden. Pushing will trigger the existing macOS
+workflow, but its outcome must be checked before claiming native acceptance.
+
+Handoff ETA: installer/docs are delivered now; VPS setup/reconciliation can run
+when its operator executes the documented commands. A release ETA cannot be
+revised responsibly before native/client gap validation and VPS results arrive.
+The previous 23–37-day plan is historical estimation, not a commitment or
+evidence of remaining progress. No root cause or completed algorithm fix is claimed.
+
+## Inherited September 30 ledger
+
 Updated 2026-09-30. Release is NOT READY. No root cause established. Fixed effort
 coefficients remain unchanged. Synthetic evidence is not population evidence.
 

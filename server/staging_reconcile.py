@@ -14,10 +14,10 @@ import httpx
 import psycopg
 from server.tests.test_collector import event, batch
 from analysis.central.report import report
+from server.staging_settings import state_directory, staging_dsn
 
-state = Path.home()/'.config/linkedgames-telemetry-staging'
-values = dict(line.split('=',1) for line in (state/'postgres.env').read_text().splitlines())
-dsn = 'postgresql://telemetry:'+values['POSTGRES_PASSWORD']+'@127.0.0.1:55439/telemetry'
+state = state_directory()
+dsn = staging_dsn()
 client = httpx.Client(base_url='https://localhost:8941',verify=ssl.create_default_context(cafile=str(state/'tls.crt')),timeout=30)
 assert client.get('/health').status_code == 200
 installations = []

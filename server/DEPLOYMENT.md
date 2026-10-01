@@ -1,5 +1,11 @@
 # Telemetry deployment
 
+**Provenance:** The September 30 host/deployment observations below were recorded
+by the previous agent. The October 1 continuation is on an isolated cloud machine
+without `/phil_services` or VPS access. They are not fresh VPS verification.
+Use [VPS installation instructions](VPS_INSTALL.md) and `install-vps.sh` on the
+actual VPS; the new script prepares staging only and preserves production.
+
 Inspected 2026-09-30: Ubuntu 22.04.5, 6 logical CPUs, 25 GiB RAM (~18 GiB
 available), 345 GiB filesystem (211 GiB free), no swap. Shared workloads include
 Nginx on 80/443, an existing PostgreSQL on 5432, Docker apps, PM2 apps and mail.
