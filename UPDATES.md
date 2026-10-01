@@ -1,5 +1,24 @@
 # Updating LinkedInGames
 
+## Telemetry update 2.1.3
+
+The previous public release is 2.1.2 (build 7). The `codex/dev-difficulty-telemetry`
+branch builds 2.1.3 (build 8). The ARM64 macOS Actions job builds the app,
+runs `--self-test`, and retains `LinkedInGames-2.1.3.zip` as an Actions artifact.
+The draft GitHub release already contains the tested archive. It must stay a
+draft until the matching Sparkle-signed `appcast.xml` is attached. The private
+key is only on the existing release Mac; generating a new key would break
+updates for installed users.
+
+On the release Mac with the existing Keychain key, fetch this branch and run
+`./prepare-release.sh 2.1.3 8`. The script verifies that the Keychain public key
+matches the app and produces a matching signed archive and feed. Replace **both**
+draft assets with that pair before publishing the draft; an appcast generated
+for a different archive cannot be paired with the Actions zip. Use the release
+notes already on the draft. Then confirm `latest/download/appcast.xml` points
+to 2.1.3. The update prompts users through Sparkle. On first launch, the app
+asks separately for permission to upload saved history and future telemetry.
+
 The macOS app uses Sparkle 2.9.6. It checks the GitHub Releases appcast in the
 background and asks before downloading and installing an update. Users can
 also choose **LinkedInGames → Check for Updates…** or turn automatic checks

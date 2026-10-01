@@ -1,5 +1,27 @@
 # Telemetry deployment
 
+## Live VPS status, October 1, 2026
+
+The central collector is running as `linkedgames-telemetry.service` behind
+`https://telemetry.just-on-time.com`; its PostgreSQL 16 database is on the
+existing loopback listener 55440. The collector's `app.py` and `protocol.py`
+were updated from this branch. The restricted ingestion role received SELECT
+on `schema_migrations` for the new health check. A local pre-update database
+snapshot and the previous collector files are under
+`~/.config/linkedgames-telemetry-central/`, outside Git. The existing central
+database, container, systemd unit and Nginx route were preserved.
+
+After restart, both loopback and public HTTPS `/health` returned ready. A
+synthetic public HTTPS enrollment and upload received an accepted receipt;
+the read-only role found the exact event ID and SHA-256 in `raw_events`.
+Previously stored telemetry remained in place. This confirms the endpoint is
+ready to receive consented clients. The local snapshot is not an encrypted
+off-host backup.
+
+App release 2.1.3 (build 8) is prepared separately through the macOS workflow;
+GitHub release publication requires the existing Sparkle private key. The
+collector's readiness does not itself cause older app versions to upload.
+
 **Provenance:** The September 30 host/deployment observations below were recorded
 by the previous agent. The October 1 continuation is on an isolated cloud machine
 without `/phil_services` or VPS access. They are not fresh VPS verification.
