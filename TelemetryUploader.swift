@@ -2,6 +2,7 @@ import Foundation
 
 /// One in-flight persisted batch; at-least-once delivery, exact-hash receipts.
 final class TelemetryUploader {
+    static let defaultEndpoint = "https://telemetry.just-on-time.com"
     private let queue = DispatchQueue(label:"difficulty.upload",qos:.utility)
     private let journal: DifficultyJournal
     private let directory: URL
@@ -17,9 +18,10 @@ final class TelemetryUploader {
     }
     func wake() { queue.async { self.start() } }
     private func start() {
-        guard !busy, TelemetryConsent.supplied?.status == "active",
-              UserDefaults.standard.bool(forKey:"difficulty.telemetry.uploadEnabled"),
-              let configured = UserDefaults.standard.string(forKey:"difficulty.telemetry.endpoint"),
+        guard !busy, let consent = TelemetryConsent.supplied,
+              consent.status == "active", consent.version == TelemetryConsent.currentVersion,
+              UserDefaults.standard.object(forKey:"difficulty.telemetry.uploadEnabled") as? Bool != false,
+              let configured = UserDefaults.standard.string(forKey:"difficulty.telemetry.endpoint") ?? Self.defaultEndpoint,
               let endpoint = URL(string:configured), endpoint.scheme == "https", endpoint.user == nil,
               endpoint.password == nil else { return }
         busy = true

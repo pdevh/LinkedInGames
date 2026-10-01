@@ -82,7 +82,10 @@ final class ProgressStore {
             if recoveredFeedback { save() }
         } catch { NSLog("Difficulty recovery unavailable: %@", String(describing:error)) }
         if startTelemetry {
-            do { telemetry = try GameplayTelemetry(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite")) }
+            do {
+                telemetry = try GameplayTelemetry(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite"))
+                telemetry?.importLegacy(snapshot)
+            }
             catch { NSLog("Difficulty capture unavailable: %@", String(describing:error)) }
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// ProgressStore owns the compatible save; this object owns the independent journal.
 /// Absent supplied consent remains unknown and does not enable capture.
@@ -36,8 +37,48 @@ final class GameplayTelemetry {
         }
         lastForeground = now
     }
+    /// Import only records that predate the new consent. Stable IDs make launch and
+    /// lost-ack retries safe without guessing missing historical timestamps.
+    func importLegacy(_ snapshot: AppSnapshot) {
+        guard let consent = TelemetryConsent.supplied, consent.status == "active",
+              consent.version == TelemetryConsent.currentVersion else { return }
+        var importedZip = Set<UUID>()
+        for record in snapshot.records + snapshot.progress.values.compactMap(\.statistics)
+        where importedZip.insert(record.id).inserted && record.createdAt < (consent.effectiveAt ?? .distantPast) {
+            importRecord(record, game:"zip", recordID:record.id, quality:"recorded")
+        }
+        if let patches = snapshot.patches {
+            var importedPatches = Set<UUID>()
+            for record in patches.records + patches.sessions.values.map(\.record)
+            where importedPatches.insert(record.id).inserted &&
+                (record.createdAt == nil || record.createdAt! < (consent.effectiveAt ?? .distantPast)) {
+                importRecord(record, game:"patches", recordID:record.id,
+                             quality:record.createdAt == nil ? "missingLegacy" : (record.timestampQuality ?? "unknown"))
+            }
+        }
+        uploader?.wake()
+    }
+    private func importRecord<T: Encodable>(_ record: T, game: String, recordID: UUID, quality: String) {
+        let eventID = Self.legacyEventID(game:game, recordID:recordID)
+        do {
+            guard try !journal.contains(eventID:eventID) else { return }
+            self.record(game:game,serveID:recordID,kind:"legacyImport",
+                        payload:LegacyImport(recordID:recordID,timestampQuality:quality,record:record),eventID:eventID)
+        } catch { lastError = error; NSLog("Difficulty legacy import failed: %@", String(describing:error)) }
+    }
+    static func legacyEventID(game: String, recordID: UUID) -> UUID {
+        let bytes = Array(SHA256.hash(data:Data(("legacy-import-v1:" + game + ":" + recordID.uuidString).utf8)))
+        return UUID(uuid:(bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],
+                                 bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
+    }
+    private struct LegacyImport<T: Encodable>: Encodable {
+        let origin = "legacyImport"
+        let recordID: UUID
+        let timestampQuality: String
+        let record: T
+    }
     func record<T: Encodable>(game: String, serveID: UUID?, kind: String, payload: T,
-                              terminal: Data? = nil) {
+                              terminal: Data? = nil, eventID: UUID = UUID()) {
         guard let consent = TelemetryConsent.supplied, consent.status == "active" else { return }
         do {
             let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
@@ -59,7 +100,7 @@ final class GameplayTelemetry {
                     "versions":versions,"payload":body]
                 return try JSONSerialization.data(withJSONObject:event,options:[.sortedKeys])
             }
-            try journal.append(terminal:terminalValue) { sequence,id in
+            try journal.append(eventID:eventID,terminal:terminalValue) { sequence,id in
                 try envelope(sequence:sequence,id:id,eventKind:kind,eventGame:game,eventServe:serveID,body:object)
             }
             captureCount += 1

@@ -151,6 +151,16 @@ final class DifficultyJournal {
             return value
         }
     }
+    func contains(eventID: UUID) throws -> Bool {
+        try writer.sync {
+            var found = false
+            try statement("SELECT 1 FROM events WHERE event_id=?") { p in
+                bind(eventID.uuidString, 1, p)
+                found = sqlite3_step(p) == SQLITE_ROW
+            }
+            return found
+        }
+    }
     func pending(limit: Int = 500, now: Date = Date()) throws -> [Pending] {
         try writer.sync {
             var rows: [Pending] = []

@@ -2,6 +2,7 @@ import Foundation
 import Security
 
 struct TelemetryConsent: Codable {
+    static let currentVersion = "central-gameplay-and-history-v2"
     var status: String
     var version: String
     var effectiveAt: Date?
@@ -9,7 +10,7 @@ struct TelemetryConsent: Codable {
         guard let data = UserDefaults.standard.data(forKey: "difficulty.telemetry.consent") else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
-    static func set(status: String, version: String = "central-gameplay-v1", now: Date = Date()) throws {
+    static func set(status: String, version: String = currentVersion, now: Date = Date()) throws {
         let value = Self(status: status, version: version, effectiveAt: now)
         UserDefaults.standard.set(try JSONEncoder().encode(value), forKey: "difficulty.telemetry.consent")
     }

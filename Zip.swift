@@ -689,6 +689,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     private var generationID = UUID()
     private let loadingLabel = NSTextField(labelWithString: "Creating your puzzle…")
     private let spinner = NSProgressIndicator()
+    private var telemetryMenuItem: NSMenuItem?
 
     private func leaveCurrentGame() {
         DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
@@ -755,6 +756,7 @@ final class GameController: NSObject, NSApplicationDelegate {
         telemetryItem.target = self
         telemetryItem.state = TelemetryConsent.supplied?.status == "active" ? .on : .off
         appMenu.addItem(telemetryItem)
+        telemetryMenuItem = telemetryItem
         let feedbackItem = NSMenuItem(title: "Ask for Optional Difficulty Feedback", action: #selector(toggleDifficultyFeedback(_:)), keyEquivalent: "")
         feedbackItem.target = self
         feedbackItem.state = UserDefaults.standard.object(forKey:"difficulty.feedback.enabled") as? Bool == false ||
@@ -803,20 +805,33 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleTelemetryConsent(_ sender: NSMenuItem) {
-        if TelemetryConsent.supplied?.status == "active" {
+        if TelemetryConsent.supplied?.status == "active" &&
+            TelemetryConsent.supplied?.version == TelemetryConsent.currentVersion {
             try? TelemetryConsent.set(status:"declined")
             sender.state = .off
             return
         }
+        offerTelemetryConsent()
+    }
+
+    private func offerTelemetryConsent() {
         let alert = NSAlert()
         alert.messageText = "Share difficulty telemetry?"
-        alert.informativeText = "If you opt in, LinkedInGames records gameplay locally and, when upload is enabled for this installation, sends gameplay actions, generated candidate pools, timing, app and system versions, and optional difficulty feedback to help developers evaluate difficulty. It does not collect hardware serial numbers or unrelated files. Play remains available offline, and you can turn sharing off here at any time."
+        alert.informativeText = "If you agree, LinkedInGames securely uploads your saved Zip and Patches play history plus future gameplay, puzzle choices, timing, app and system versions, and optional difficulty feedback. Old records with missing dates remain marked unknown. No unrelated files or hardware serial numbers are sent. Playing offline still works. You can stop sharing from this menu."
         alert.addButton(withTitle:"Share telemetry")
         alert.addButton(withTitle:"Not now")
         if alert.runModal() == .alertFirstButtonReturn {
-            try? TelemetryConsent.set(status:"active")
-            sender.state = .on
-            store?.telemetry?.foreground()
+            do {
+                try TelemetryConsent.set(status:"active")
+                telemetryMenuItem?.state = .on
+                store?.telemetry?.importLegacy(store.snapshot)
+            } catch {
+                let failure = NSAlert(); failure.messageText = "Sharing could not be enabled"
+                failure.informativeText = error.localizedDescription; failure.runModal()
+            }
+        } else if TelemetryConsent.supplied?.version != TelemetryConsent.currentVersion {
+            try? TelemetryConsent.set(status:"declined")
+            telemetryMenuItem?.state = .off
         }
     }
 
@@ -1147,6 +1162,10 @@ final class GameController: NSObject, NSApplicationDelegate {
         showHome()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if !preview && TelemetryConsent.supplied?.status != "declined" &&
+            TelemetryConsent.supplied?.version != TelemetryConsent.currentVersion {
+            DispatchQueue.main.async { [weak self] in self?.offerTelemetryConsent() }
+        }
         if CommandLine.arguments.contains("--preview-patches") { showPatches() }
         if CommandLine.arguments.contains("--smoke-games") {
             precondition(window.contentView === home)
@@ -1427,6 +1446,7 @@ if CommandLine.arguments.contains("--telemetry-crash-writer") {
     try runTelemetryOverflowTest()
     runDifficultyFeedbackTests()
     try runTelemetryRetryTests()
+    try runLegacyImportIdentityTests()
     try runProgressRecoveryTests()
     runFeedbackPresentationTests()
     runPatchesTests()

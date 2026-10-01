@@ -16,8 +16,8 @@ if [[ ! -d "$SPARKLE_DIR/Sparkle.framework" ]]; then
     /usr/bin/tar -xf "$archive" -C "$SPARKLE_DIR"
 fi
 
-APP_VERSION=${APP_VERSION:-2.1.0}
-APP_BUILD=${APP_BUILD:-5}
+APP_VERSION=${APP_VERSION:-2.1.3}
+APP_BUILD=${APP_BUILD:-8}
 [[ "$APP_VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] || { echo "APP_VERSION must be major.minor.patch" >&2; exit 1; }
 [[ "$APP_BUILD" =~ '^[0-9]+$' ]] || { echo "APP_BUILD must be an integer" >&2; exit 1; }
 CODE_SIGN_IDENTITY=${CODE_SIGN_IDENTITY:--}

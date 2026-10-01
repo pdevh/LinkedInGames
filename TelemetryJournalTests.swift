@@ -124,6 +124,24 @@ func runTelemetryRetryTests() throws {
     print("Telemetry retry: complete receipts, duplicate ACK, persisted delay, 429/503 Retry-After passed")
 }
 
+func runLegacyImportIdentityTests() throws {
+    let recordID = UUID()
+    let zipID = GameplayTelemetry.legacyEventID(game:"zip",recordID:recordID)
+    precondition(zipID == GameplayTelemetry.legacyEventID(game:"zip",recordID:recordID))
+    precondition(zipID != GameplayTelemetry.legacyEventID(game:"patches",recordID:recordID))
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:folder) }
+    let journal = try DifficultyJournal(url:folder.appendingPathComponent("legacy.sqlite"))
+    try journal.append(eventID:zipID) { _,_ in Data("{}".utf8) }
+    let beforeAcknowledgment = try journal.contains(eventID:zipID)
+    precondition(beforeAcknowledgment)
+    let pending = try journal.pending()
+    try journal.acknowledge([(zipID.uuidString,pending[0].sha256)])
+    let afterAcknowledgment = try journal.contains(eventID:zipID)
+    precondition(afterAcknowledgment)
+    print("Legacy import: stable per-game identity and durable deduplication passed")
+}
+
 func runProgressRecoveryTests() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at:folder) }
