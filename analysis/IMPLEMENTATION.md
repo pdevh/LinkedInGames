@@ -17,11 +17,14 @@ claimed; effort coefficients and active selection/timing models are unchanged.
   max receipt 0.137 seconds; local snapshot restore 0.681 seconds / 119,290 bytes.
   Synthetic candidate fixtures do not establish native payload capacity.
 - **Preserved:** original dirty checkout, unmanaged staging container/volume and
-  listener, live central service, all unrelated services. New test source database
+  listener, live central service, all unrelated services. The temporary 8943
+  collector was stopped after validation; 8941/8942 remain running. New test source database
   and artifacts retained outside Git. Installer --check now identifies unmanaged
   staging before making changes. Public HTTPS /health responded ready.
-- **Native verification:** current Actions build/self-test result recorded in the
-  final handoff; includes real AppKit sheet ordering checks and recovery/retry tests.
+- **Native verified:** [macOS run 36909356739](https://github.com/pdevh/LinkedInGames/actions/runs/36909356739)
+  passed at `af17e28` (the final Swift source): AppKit build, real sheet ordering,
+  answer/skip/stop/close, recovery/retry, SIGKILL and existing gameplay regressions.
+  The first run exposed an overlapping-access compiler error, fixed in that commit.
   Human VoiceOver/keyboard/visual acceptance remains unverified.
 - **Deferred:** new statistical models, experiments, percentage rollout, generator
   redesign, exhaustive semantic tracing and research reporting. Existing candidate
