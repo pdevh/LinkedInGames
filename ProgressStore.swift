@@ -41,7 +41,7 @@ final class ProgressStore {
                         snapshot.progress[key]?.statistics = record
                         if record.outcome == "solved" {
                             snapshot.progress[key]?.completed = true; snapshot.progress[key]?.path = record.puzzle.solution
-                            if snapshot.progress[key]?.solved.contains(record.puzzle) == false { snapshot.progress[key]?.solved.append(record.puzzle) }
+                            if snapshot.progress[key]?.solved.contains(where: { CandidateDecision.content($0).0 == CandidateDecision.content(record.puzzle).0 }) == false { snapshot.progress[key]?.solved.append(record.puzzle) }
                         } else { snapshot.progress.removeValue(forKey:key) }
                     }
                 } else if terminal.game == "patches", var record = try? JSONDecoder().decode(PatchesRecord.self, from:terminal.data) {
@@ -58,20 +58,24 @@ final class ProgressStore {
             }
             var recoveredFeedback = false
             for index in snapshot.records.indices where DifficultyFeedbackCoordinator.needsRecovery(snapshot.records[index].feedback) {
-                snapshot.records[index].feedback = DifficultyFeedbackCoordinator.recovery(snapshot.records[index].feedback)
+                let recovered = DifficultyFeedbackCoordinator.recovery(snapshot.records[index].feedback)
+                snapshot.records[index].feedback = recovered
                 recoveredFeedback = true
             }
             for key in Array(snapshot.progress.keys) where snapshot.progress[key]?.completed == true && DifficultyFeedbackCoordinator.needsRecovery(snapshot.progress[key]?.statistics?.feedback) {
-                snapshot.progress[key]?.statistics?.feedback = DifficultyFeedbackCoordinator.recovery(snapshot.progress[key]?.statistics?.feedback)
+                let recovered = DifficultyFeedbackCoordinator.recovery(snapshot.progress[key]?.statistics?.feedback)
+                snapshot.progress[key]?.statistics?.feedback = recovered
                 recoveredFeedback = true
             }
             if snapshot.patches != nil {
                 for index in snapshot.patches!.records.indices where DifficultyFeedbackCoordinator.needsRecovery(snapshot.patches!.records[index].feedback) {
-                    snapshot.patches!.records[index].feedback = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.records[index].feedback)
+                    let recovered = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.records[index].feedback)
+                snapshot.patches!.records[index].feedback = recovered
                     recoveredFeedback = true
                 }
                 for key in Array(snapshot.patches!.sessions.keys) where snapshot.patches!.sessions[key]?.record.solved == true && DifficultyFeedbackCoordinator.needsRecovery(snapshot.patches!.sessions[key]?.record.feedback) {
-                    snapshot.patches!.sessions[key]?.record.feedback = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.sessions[key]?.record.feedback)
+                    let recovered = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.sessions[key]?.record.feedback)
+                snapshot.patches!.sessions[key]?.record.feedback = recovered
                     recoveredFeedback = true
                 }
             }

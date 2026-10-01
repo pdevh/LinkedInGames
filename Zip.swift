@@ -1250,7 +1250,8 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.progress.current = generated; self.progress.completed = false
                 self.activeGap = 0
                 self.progress.statistics = PlayStatistics(puzzle: generated, difficulty: selected)
-                self.progress.statistics?.feedback = DifficultyFeedbackCoordinator.shared.assign(serveID:self.progress.statistics!.id)
+                let invitation = DifficultyFeedbackCoordinator.shared.assign(serveID:self.progress.statistics!.id)
+                self.progress.statistics?.feedback = invitation
                 self.progress.statistics?.predictedEffort = model.predict(generated)
                 self.progress.statistics?.predictedDifficultyProbabilities = model.forecast(generated).probabilities
                 self.progress.statistics?.difficultyTargets = model.targets
