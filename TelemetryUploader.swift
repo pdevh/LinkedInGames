@@ -18,10 +18,10 @@ final class TelemetryUploader {
     }
     func wake() { queue.async { self.start() } }
     private func start() {
+        let configured = UserDefaults.standard.string(forKey:"difficulty.telemetry.endpoint") ?? Self.defaultEndpoint
         guard !busy, let consent = TelemetryConsent.supplied,
               consent.status == "active", consent.version == TelemetryConsent.currentVersion,
               UserDefaults.standard.object(forKey:"difficulty.telemetry.uploadEnabled") as? Bool != false,
-              let configured = UserDefaults.standard.string(forKey:"difficulty.telemetry.endpoint") ?? Self.defaultEndpoint,
               let endpoint = URL(string:configured), endpoint.scheme == "https", endpoint.user == nil,
               endpoint.password == nil else { return }
         busy = true
