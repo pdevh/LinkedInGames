@@ -132,6 +132,7 @@ struct PatchesPuzzle: Codable, Equatable {
 }
 
 struct PatchesRecord: Codable {
+    var feedback: DifficultyFeedback?
     // Optional additions preserve legacy unknown timestamps during synthesized decoding.
     var createdAt: Date?
     var firstVisibleAt: Date?

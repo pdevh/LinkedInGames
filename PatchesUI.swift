@@ -291,6 +291,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
     var gameContent: NSView { window.contentView! }
     func attach(to host: NSWindow) { window = host; host.delegate = self; isPresented = true }
     func leave() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         if !paused { tick() }
         pause(); statisticsScreen.isHidden = true; picker.isHidden = false
         isPresented = false
@@ -439,7 +440,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         hint.title = hints >= 3 ? "Hints used" : wait > 0 ? "Hint · \(wait)s" : "Hint"
         hint.isEnabled = !paused && !solved && !loading && hints < 3 && wait == 0
         if loading { status.stringValue = "Creating your puzzle…" }
-        else if solved { status.stringValue = "Puzzle complete · \(session?.record.verdict ?? "") for you" }
+        else if solved { status.stringValue = DifficultyFeedbackCoordinator.canDisclose(session?.record.feedback) ? "Puzzle complete · \(session?.record.verdict ?? "") for you" : "Solved" }
         else if paused { status.stringValue = session == nil ? "Ready when you are · Press Play" : "Paused · Progress saved" }
 
     }
@@ -454,7 +455,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         finishInterval(); paused = true; board.enabled = session?.record.solved == true; save(); refresh()
     }
     func windowDidResignKey(_ notification:Notification) { if !paused { tick(); pause() } }
-    func windowWillClose(_ notification:Notification) { pause() }
+    func windowWillClose(_ notification:Notification) { DifficultyFeedbackCoordinator.shared.resolvePending(reason:"close"); pause() }
     func flush() { if !paused { tick() }; finishInterval(); save() }
     private func tick() {
         let now = Date(), delta = now.timeIntervalSince(lastTick); lastTick = now
@@ -469,10 +470,12 @@ final class PatchesController: NSObject, NSWindowDelegate {
         if interval > 0 { session?.record.intervals.append(interval) }; interval = 0
     }
     private func changeDifficulty(_ d:Difficulty) {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         if !paused { tick() }; pause(); generation = UUID(); loading = false
         difficulty = d; session = snapshot.sessions[String(d.rawValue)]; restore(); save()
     }
     @objc private func newPuzzle() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         if !paused { tick() }; finishInterval()
         if var discarded = session?.record, !discarded.solved, discarded.endedAt == nil {
             discarded.endedAt = Date(); discarded.outcome = "skipped"
@@ -494,6 +497,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
             record.targets = model.targets; record.forecast = model.forecast(puzzle).probabilities
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == token else { return }
+                record.feedback = DifficultyFeedbackCoordinator.shared.assign(serveID:record.id)
                 record.firstVisibleAt = Date()
                 if let decision { self.store.telemetry?.record(game:"patches",serveID:record.id,kind:"candidateDecision",payload:decision) }
                 self.store.telemetry?.record(game:"patches",serveID:record.id,kind:"serve",payload:record)
@@ -531,7 +535,16 @@ final class PatchesController: NSObject, NSWindowDelegate {
         store.telemetry?.record(game:"patches",serveID:s.record.id,kind:"placement",payload:s)
         session = s; board.placed = placed; board.feedback(s.record.solved ? .levelChange : .alignment)
         status.stringValue = "\(placed.reduce(0) { $0+$1.area }) / \(s.record.puzzle.size*s.record.puzzle.size) cells filled"
-        if s.record.solved { paused = true; toast.show(verdict:s.record.verdict,accent:.systemTeal) }
+        if s.record.solved {
+            paused = true
+            DifficultyFeedbackCoordinator.shared.present(s.record.feedback,window:window,save: { [weak self] feedback in
+                guard let self else { return }
+                self.session?.record.feedback = feedback
+                if let index = self.snapshot.records.firstIndex(where: { $0.id == s.record.id }) { self.snapshot.records[index].feedback = feedback }
+                self.store.telemetry?.record(game:"patches",serveID:s.record.id,kind:"feedback"+feedback.state.capitalized,payload:feedback)
+                self.save(); self.store.flush(); self.refresh()
+            },reveal: { [weak self] in self?.toast.show(verdict:s.record.verdict,accent:.systemTeal); self?.refresh() })
+        }
         save(); refresh()
     }
     @objc private func undoMove() {
@@ -557,6 +570,7 @@ final class PatchesController: NSObject, NSWindowDelegate {
         }
     }
     @objc private func showStatistics() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         if !paused { tick(); pause() }
         picker.isHidden = true
         statisticsScreen.show(records:snapshot.records)

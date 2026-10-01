@@ -26,7 +26,7 @@ final class TelemetryUploader {
         do {
             let records = try journal.pending(limit:limit)
             guard !records.isEmpty else { busy = false; lastStatus = "No pending events"; return }
-            if identity.credential == nil { enroll(endpoint); return }
+            if identity.credential == nil { enroll(endpoint, records:records); return }
             let file = directory.appendingPathComponent("batch.json")
             let batchID = UUID().uuidString
             var entries = records
@@ -54,7 +54,7 @@ final class TelemetryUploader {
             }.resume()
         } catch { busy = false; lastStatus = "Queue error: \(error)" }
     }
-    private func enroll(_ endpoint: URL) {
+    private func enroll(_ endpoint: URL, records: [DifficultyJournal.Pending]) {
         var request = URLRequest(url:endpoint.appendingPathComponent("v1/installations"))
         request.httpMethod = "POST"; request.timeoutInterval = 30
         request.setValue("application/json",forHTTPHeaderField:"Content-Type")
@@ -64,7 +64,12 @@ final class TelemetryUploader {
                 defer { self.busy = false }
                 guard error == nil, (response as? HTTPURLResponse)?.statusCode == 200, let data,
                       let body = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
-                      let credential = body["credential"] as? String else {
+                      let credential = body["credential"] as? String, !credential.isEmpty,
+                      let installation = body["installationID"] as? String,
+                      UUID(uuidString:installation) == self.identity.installationID else {
+                    self.failures += 1
+                    try? self.journal.retry(records.map(\.eventID), after:Date().addingTimeInterval(
+                        Self.retryDelay(failures:self.failures, response:response as? HTTPURLResponse)))
                     self.lastStatus = "Enrollment unavailable; queue retained"; return
                 }
                 do { self.identity.credential = credential; try self.identity.save(); self.queue.async { self.start() } }
@@ -76,25 +81,16 @@ final class TelemetryUploader {
         defer { busy = false }
         let http = response as? HTTPURLResponse
         do {
-            if error == nil, http?.statusCode == 200, let data,
-               let receipt = try JSONSerialization.jsonObject(with:data) as? [String:Any],
-               receipt["batchID"] as? String == batchID,
-               let accepted = receipt["accepted"] as? [[String:Any]], let rejected = receipt["rejected"] as? [[String:Any]] {
-                let expected = Dictionary(uniqueKeysWithValues:sent.map { ($0.eventID,$0.sha256) })
-                var acknowledgments: [(String,String)] = []
-                for item in accepted {
-                    guard let id = item["eventID"] as? String, let hash = item["sha256"] as? String,
-                          expected[id] == hash else { throw DifficultyJournal.Failure.invalidReceipt }
-                    acknowledgments.append((id,hash))
+            if error == nil, http?.statusCode == 200, let data {
+                let receipt = try Self.validatedReceipt(data, batchID:batchID, sent:sent)
+                try journal.acknowledge(receipt.accepted.map { ($0.eventID,$0.sha256) })
+                for item in receipt.rejected {
+                    try journal.retry([item.eventID],after:Date().addingTimeInterval(30),
+                                      quarantine:item.retryable ? nil : item.reason)
                 }
-                try journal.acknowledge(acknowledgments)
-                for item in rejected {
-                    if let id = item["eventID"] as? String, expected[id] != nil, item["retryable"] as? Bool == false {
-                        try journal.retry([id],after:Date(),quarantine:item["reason"] as? String ?? "rejected")
-                    }
-                }
-                failures = 0; lastStatus = "Acknowledged \(acknowledgments.count) events"
+                failures = 0; lastStatus = "Acknowledged \(receipt.accepted.count) events"
                 try? FileManager.default.removeItem(at:file)
+                queue.async { self.start() }
                 return
             }
             failures += 1
@@ -105,17 +101,51 @@ final class TelemetryUploader {
                 lastStatus = "Credential recovery queued; event identity retained"
             }
             else { lastStatus = "Retry queued (\(http?.statusCode ?? 0))" }
-            let ceiling = min(3600,5*pow(2,Double(min(failures-1,10))))
-            var delay = Double.random(in:0...ceiling)
-            if let header = http?.value(forHTTPHeaderField:"Retry-After") {
-                if let seconds = Double(header) { delay = max(delay,seconds) }
-                else {
-                    let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX")
-                    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
-                    if let date = formatter.date(from:header) { delay = max(delay,date.timeIntervalSinceNow) }
-                }
-            }
-            try journal.retry(sent.map(\.eventID),after:Date().addingTimeInterval(delay))
-        } catch { lastStatus = "Receipt/queue error; data retained: \(error)" }
+            try journal.retry(sent.map(\.eventID),after:Date().addingTimeInterval(Self.retryDelay(failures:failures,response:http)))
+        } catch {
+            failures += 1
+            try? journal.retry(sent.map(\.eventID),after:Date().addingTimeInterval(Self.retryDelay(failures:failures,response:http)))
+            lastStatus = "Receipt/queue error; data retained"
+        }
     }
+    struct Receipt: Decodable {
+        struct Accepted: Decodable { let eventID: String; let sha256: String }
+        struct Rejected: Decodable { let eventID: String; let reason: String; let retryable: Bool }
+        let batchID: String
+        let accepted: [Accepted]
+        let rejected: [Rejected]
+    }
+    /// Validate the entire receipt before removing anything from the outbox.
+    static func validatedReceipt(_ data: Data, batchID: String, sent: [DifficultyJournal.Pending]) throws -> Receipt {
+        let receipt = try JSONDecoder().decode(Receipt.self,from:data)
+        guard receipt.batchID == batchID else { throw DifficultyJournal.Failure.invalidReceipt }
+        let expected = Dictionary(uniqueKeysWithValues:sent.map { ($0.eventID,$0.sha256) })
+        var seen = Set<String>()
+        for item in receipt.accepted {
+            guard expected[item.eventID] == item.sha256, seen.insert(item.eventID).inserted else {
+                throw DifficultyJournal.Failure.invalidReceipt
+            }
+        }
+        for item in receipt.rejected {
+            guard expected[item.eventID] != nil, !item.reason.isEmpty, seen.insert(item.eventID).inserted else {
+                throw DifficultyJournal.Failure.invalidReceipt
+            }
+        }
+        guard seen == Set(expected.keys) else { throw DifficultyJournal.Failure.invalidReceipt }
+        return receipt
+    }
+    static func retryDelay(failures: Int, response: HTTPURLResponse?, now: Date = Date()) -> TimeInterval {
+        let ceiling = min(3600,5*pow(2,Double(min(max(0,failures-1),10))))
+        var delay = Double.random(in:1...max(1,ceiling))
+        if let header = response?.value(forHTTPHeaderField:"Retry-After") {
+            if let seconds = Double(header), seconds.isFinite { delay = max(delay,seconds) }
+            else {
+                let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX")
+                formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
+                if let date = formatter.date(from:header) { delay = max(delay,date.timeIntervalSince(now)) }
+            }
+        }
+        return delay
+    }
+
 }

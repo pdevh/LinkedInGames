@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 func runTelemetryJournalTests() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -71,4 +71,126 @@ func runTelemetryOverflowTest() throws {
     precondition(lost == 11 && pending.count == 10)
     precondition(pending.last!.payload.contains("lostIDs"))
     print("Telemetry overflow: evictions and loss manifest reconciled")
+}
+
+func runDifficultyFeedbackTests() {
+    let suite = "feedback-tests-" + UUID().uuidString
+    let defaults = UserDefaults(suiteName:suite)!
+    defer { defaults.removePersistentDomain(forName:suite) }
+    let coordinator = DifficultyFeedbackCoordinator(defaults:defaults)
+    let serveID = UUID(uuidString:"00000000-0000-0000-0000-000000000001")!
+    let first = coordinator.assign(serveID:serveID)
+    let repeatDraw = coordinator.assign(serveID:serveID)
+    precondition(first.draw == repeatDraw.draw)
+    precondition(first.eligibleProbability == 0.25)
+    defaults.set(true,forKey:"difficulty.feedback.stopped")
+    let stopped = coordinator.assign(serveID:UUID())
+    precondition(stopped.state == "notInvited" && stopped.suppressionReason == "disabled")
+    let pending = DifficultyFeedback(draw:0,eligibleProbability:0.25,suppressionReason:nil,state:"pending")
+    let recovered = DifficultyFeedbackCoordinator.recovery(pending)
+    precondition(recovered?.state == "skipped" && recovered?.resolution == "recovery" && recovered?.contractSatisfied == true)
+    precondition(DifficultyFeedbackCoordinator.canDisclose(pending) == false)
+    precondition(DifficultyFeedbackCoordinator.canDisclose(recovered) == true)
+    print("Difficulty feedback: deterministic assignment, disable, recovery and disclosure gate passed")
+}
+
+func runTelemetryRetryTests() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:folder) }
+    let journal = try DifficultyJournal(url:folder.appendingPathComponent("retry.sqlite"))
+    try journal.append { _,_ in Data("{}".utf8) }
+    let sent = try journal.pending(), id = sent[0].eventID, hash = sent[0].sha256
+    func receipt(_ accepted: [[String:Any]], _ rejected: [[String:Any]] = []) throws -> Data {
+        try JSONSerialization.data(withJSONObject:["batchID":"batch","accepted":accepted,"rejected":rejected])
+    }
+    for data in [try receipt([]), try receipt([["eventID":id,"sha256":"wrong"]]),
+                 try receipt([["eventID":id,"sha256":hash],["eventID":id,"sha256":hash]]),
+                 try receipt([["eventID":id,"sha256":hash]],[["eventID":id,"reason":"conflict","retryable":false]])] {
+        do { _ = try TelemetryUploader.validatedReceipt(data,batchID:"batch",sent:sent); preconditionFailure("Invalid receipt accepted") }
+        catch DifficultyJournal.Failure.invalidReceipt { }
+    }
+    let valid = try TelemetryUploader.validatedReceipt(try receipt([["eventID":id,"sha256":hash]]),batchID:"batch",sent:sent)
+    let retryAt = Date().addingTimeInterval(3600)
+    try journal.retry([id],after:retryAt)
+    let before = try journal.pending(); precondition(before.isEmpty)
+    let after = try journal.pending(now:retryAt.addingTimeInterval(1)); precondition(after.map(\.eventID) == [id])
+    try journal.acknowledge(valid.accepted.map { ($0.eventID,$0.sha256) })
+    try journal.acknowledge(valid.accepted.map { ($0.eventID,$0.sha256) }) // Lost ACK retry.
+    let remaining = try journal.pending(now:retryAt); precondition(remaining.isEmpty)
+    for code in [429,503] {
+        let response = HTTPURLResponse(url:URL(string:"https://localhost")!,statusCode:code,httpVersion:nil,headerFields:["Retry-After":"3600"])!
+        precondition(TelemetryUploader.retryDelay(failures:1,response:response) >= 3600)
+    }
+    print("Telemetry retry: complete receipts, duplicate ACK, persisted delay, 429/503 Retry-After passed")
+}
+
+func runProgressRecoveryTests() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:folder) }
+    let journal = try DifficultyJournal(url:folder.appendingPathComponent("difficulty.sqlite"))
+    let puzzle = Puzzle.make(.easy)
+    var zipRecord = PlayStatistics(puzzle:puzzle,difficulty:.easy)
+    zipRecord.outcome = "solved"
+    zipRecord.feedback = DifficultyFeedback(draw:0,eligibleProbability:0.25,suppressionReason:nil,state:"assigned")
+    var patches = PatchesRecord(puzzle:PatchesPuzzle(size:1,clues:[],solution:[]),requested:0)
+    patches.solved = true; patches.feedback = zipRecord.feedback
+    try journal.append(terminal:(zipRecord.id,"zip",JSONEncoder().encode(zipRecord))) { _,_ in Data("{}".utf8) }
+    try journal.append(terminal:(patches.id,"patches",JSONEncoder().encode(patches))) { _,_ in Data("{}".utf8) }
+    // JSON saved after the terminal contains the response; recovery must not erase it.
+    zipRecord.feedback?.state = "shown"; zipRecord.feedback?.response = 4
+    patches.feedback?.state = "shown"; patches.feedback?.response = 2
+    let url = folder.appendingPathComponent("progress.json")
+    var snapshot = AppSnapshot()
+    snapshot.records = [zipRecord]; snapshot.patches = PatchesSnapshot(records:[patches])
+    try JSONEncoder().encode(snapshot).write(to:url)
+    let saved = try ProgressStore(url:url,startTelemetry:false)
+    precondition(saved.snapshot.records[0].feedback?.response == 4)
+    precondition(saved.snapshot.patches?.records[0].feedback?.response == 2)
+    // Crash before JSON save: both terminal records come back, invitation is explicitly skipped.
+    try JSONEncoder().encode(AppSnapshot()).write(to:url)
+    let recovered = try ProgressStore(url:url,startTelemetry:false)
+    recovered.flush()
+    precondition(recovered.snapshot.records.count == 1 && recovered.snapshot.patches?.records.count == 1)
+    precondition(recovered.snapshot.records[0].feedback?.resolution == "recovery")
+    precondition(recovered.snapshot.patches?.records[0].feedback?.resolution == "recovery")
+    let again = try ProgressStore(url:url,startTelemetry:false)
+    precondition(again.snapshot.records.count == 1)
+    print("Progress recovery: post-terminal responses preserved; both games recovered without Keychain")
+}
+
+func runFeedbackPresentationTests() {
+    _ = NSApplication.shared
+    let suite = "feedback-ui-" + UUID().uuidString
+    let defaults = UserDefaults(suiteName:suite)!
+    defer { defaults.removePersistentDomain(forName:suite) }
+    let window = NSWindow(contentRect:NSRect(x:0,y:0,width:700,height:500),styleMask:[.titled],backing:.buffered,defer:false)
+    window.makeKeyAndOrderFront(nil)
+    for choice in [0,5,6,-1] {
+        defaults.removePersistentDomain(forName:suite)
+        let coordinator = DifficultyFeedbackCoordinator(defaults:defaults)
+        let assigned = DifficultyFeedback(draw:0,eligibleProbability:0.25,suppressionReason:nil,state:"assigned")
+        var states: [DifficultyFeedback] = [], revealed = false
+        coordinator.present(assigned,window:window,save: { states.append($0) },reveal: {
+            precondition(states.last?.state == "shown")
+            revealed = true
+        })
+        precondition(states.last?.state == "pending" && !revealed)
+        precondition(!DifficultyFeedbackCoordinator.canDisclose(states.last))
+        guard let sheet = window.attachedSheet else { preconditionFailure("No feedback sheet") }
+        if choice == -1 { coordinator.resolvePending(reason:"close") }
+        else { window.endSheet(sheet,returnCode:NSApplication.ModalResponse(rawValue:1000+choice)) }
+        let deadline = Date().addingTimeInterval(2)
+        while window.attachedSheet != nil && Date() < deadline {
+            RunLoop.current.run(until:Date().addingTimeInterval(0.02))
+        }
+        if choice == -1 {
+            precondition(states.last?.resolution == "close" && !revealed)
+        } else {
+            precondition(revealed && states.map(\.state) == ["pending",choice == 0 ? "submitted" : "skipped","shown"])
+            precondition(states.last?.response == (choice == 0 ? 1 : nil))
+            if choice == 6 { precondition(defaults.bool(forKey:"difficulty.feedback.stopped")) }
+        }
+    }
+    window.orderOut(nil)
+    print("Feedback AppKit: neutral pending gate, answer, skip, stop asking and close ordering passed")
 }

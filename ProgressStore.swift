@@ -12,7 +12,7 @@ final class ProgressStore {
     var onError: ((Error) -> Void)?
     private(set) var telemetry: GameplayTelemetry?
     private let queue = DispatchQueue(label: "zip.atomic-save", qos: .utility)
-    init(url: URL) throws {
+    init(url: URL, startTelemetry: Bool = true) throws {
         self.url = url
         if FileManager.default.fileExists(atPath: url.path) {
             do { snapshot = try JSONDecoder().decode(AppSnapshot.self, from: Data(contentsOf: url)) }
@@ -31,24 +31,56 @@ final class ProgressStore {
         }
         // Telemetry failure must not prevent offline gameplay or legacy decoding.
         do {
-            telemetry = try GameplayTelemetry(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite"))
-            for terminal in try telemetry!.journal.terminalSnapshots() {
-                if terminal.game == "zip", let record = try? JSONDecoder().decode(PlayStatistics.self, from:terminal.data) {
-                    snapshot.records.removeAll { $0.id == record.id }; snapshot.records.append(record)
+            let journal = try DifficultyJournal(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite"))
+            for terminal in try journal.terminalSnapshots() {
+                if terminal.game == "zip", var record = try? JSONDecoder().decode(PlayStatistics.self, from:terminal.data) {
+                    if let saved = snapshot.records.first(where: { $0.id == record.id }), saved.outcome != "inProgress" {
+                        record = saved // JSON may contain feedback saved after the immutable terminal.
+                    } else { snapshot.records.removeAll { $0.id == record.id }; snapshot.records.append(record) }
                     for key in Array(snapshot.progress.keys) where snapshot.progress[key]?.statistics?.id == record.id {
                         snapshot.progress[key]?.statistics = record
-                        if record.outcome == "solved" { snapshot.progress[key]?.completed = true; snapshot.progress[key]?.path = record.puzzle.solution }
+                        if record.outcome == "solved" {
+                            snapshot.progress[key]?.completed = true; snapshot.progress[key]?.path = record.puzzle.solution
+                            if snapshot.progress[key]?.solved.contains(record.puzzle) == false { snapshot.progress[key]?.solved.append(record.puzzle) }
+                        } else { snapshot.progress.removeValue(forKey:key) }
                     }
-                } else if terminal.game == "patches", let record = try? JSONDecoder().decode(PatchesRecord.self, from:terminal.data) {
+                } else if terminal.game == "patches", var record = try? JSONDecoder().decode(PatchesRecord.self, from:terminal.data) {
                     if snapshot.patches == nil { snapshot.patches = PatchesSnapshot() }
-                    snapshot.patches?.records.removeAll { $0.id == record.id }; snapshot.patches?.records.append(record)
+                    if let saved = snapshot.patches?.records.first(where: { $0.id == record.id }), saved.solved || saved.endedAt != nil {
+                        record = saved
+                    } else { snapshot.patches?.records.removeAll { $0.id == record.id }; snapshot.patches?.records.append(record) }
                     for key in Array(snapshot.patches!.sessions.keys) where snapshot.patches?.sessions[key]?.record.id == record.id {
                         snapshot.patches?.sessions[key]?.record = record
                         if record.solved { snapshot.patches?.sessions[key]?.placed = record.puzzle.solution }
+                        else { snapshot.patches?.sessions.removeValue(forKey:key) }
                     }
                 }
             }
+            var recoveredFeedback = false
+            for index in snapshot.records.indices where DifficultyFeedbackCoordinator.needsRecovery(snapshot.records[index].feedback) {
+                snapshot.records[index].feedback = DifficultyFeedbackCoordinator.recovery(snapshot.records[index].feedback)
+                recoveredFeedback = true
+            }
+            for key in Array(snapshot.progress.keys) where snapshot.progress[key]?.completed == true && DifficultyFeedbackCoordinator.needsRecovery(snapshot.progress[key]?.statistics?.feedback) {
+                snapshot.progress[key]?.statistics?.feedback = DifficultyFeedbackCoordinator.recovery(snapshot.progress[key]?.statistics?.feedback)
+                recoveredFeedback = true
+            }
+            if snapshot.patches != nil {
+                for index in snapshot.patches!.records.indices where DifficultyFeedbackCoordinator.needsRecovery(snapshot.patches!.records[index].feedback) {
+                    snapshot.patches!.records[index].feedback = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.records[index].feedback)
+                    recoveredFeedback = true
+                }
+                for key in Array(snapshot.patches!.sessions.keys) where snapshot.patches!.sessions[key]?.record.solved == true && DifficultyFeedbackCoordinator.needsRecovery(snapshot.patches!.sessions[key]?.record.feedback) {
+                    snapshot.patches!.sessions[key]?.record.feedback = DifficultyFeedbackCoordinator.recovery(snapshot.patches!.sessions[key]?.record.feedback)
+                    recoveredFeedback = true
+                }
+            }
+            if recoveredFeedback { save() }
         } catch { NSLog("Difficulty recovery unavailable: %@", String(describing:error)) }
+        if startTelemetry {
+            do { telemetry = try GameplayTelemetry(url: url.deletingLastPathComponent().appendingPathComponent("difficulty.sqlite")) }
+            catch { NSLog("Difficulty capture unavailable: %@", String(describing:error)) }
+        }
     }
     func save() {
         let captured = snapshot

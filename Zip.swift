@@ -542,6 +542,7 @@ struct DifficultyMeasurements: Codable {
 }
 
 struct PlayStatistics: Codable {
+    var feedback: DifficultyFeedback?
     var experiencedDifficulty: String?
     var predictedEffort: Double?
     var predictedDifficultyProbabilities: [Double]?
@@ -690,6 +691,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     private let spinner = NSProgressIndicator()
 
     private func leaveCurrentGame() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         if activeGame == "zip" { if !startScreen && !paused && !progress.completed { pauseGame() }; saveProgress() }
         if activeGame == "patches" { patchesController?.leave() }
     }
@@ -749,6 +751,16 @@ final class GameController: NSObject, NSApplicationDelegate {
         timerItem.state = timerStartsOnVisible ? .on : .off
         appMenu.addItem(timerItem)
 
+        let telemetryItem = NSMenuItem(title: "Share Difficulty Telemetry", action: #selector(toggleTelemetryConsent(_:)), keyEquivalent: "")
+        telemetryItem.target = self
+        telemetryItem.state = TelemetryConsent.supplied?.status == "active" ? .on : .off
+        appMenu.addItem(telemetryItem)
+        let feedbackItem = NSMenuItem(title: "Ask for Optional Difficulty Feedback", action: #selector(toggleDifficultyFeedback(_:)), keyEquivalent: "")
+        feedbackItem.target = self
+        feedbackItem.state = UserDefaults.standard.object(forKey:"difficulty.feedback.enabled") as? Bool == false ||
+            UserDefaults.standard.bool(forKey:"difficulty.feedback.stopped") ? .off : .on
+        appMenu.addItem(feedbackItem)
+
         let quitItem = NSMenuItem(title: "Quit LinkedInGames", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         appMenu.addItem(quitItem)
@@ -788,6 +800,32 @@ final class GameController: NSObject, NSApplicationDelegate {
         } else if !timerStartsOnVisible && activeGame == "zip" && startedAt != nil {
             lastInput = Date()
         }
+    }
+
+    @objc private func toggleTelemetryConsent(_ sender: NSMenuItem) {
+        if TelemetryConsent.supplied?.status == "active" {
+            try? TelemetryConsent.set(status:"declined")
+            sender.state = .off
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Share difficulty telemetry?"
+        alert.informativeText = "If you opt in, LinkedInGames records gameplay locally and, when upload is enabled for this installation, sends gameplay actions, generated candidate pools, timing, app and system versions, and optional difficulty feedback to help developers evaluate difficulty. It does not collect hardware serial numbers or unrelated files. Play remains available offline, and you can turn sharing off here at any time."
+        alert.addButton(withTitle:"Share telemetry")
+        alert.addButton(withTitle:"Not now")
+        if alert.runModal() == .alertFirstButtonReturn {
+            try? TelemetryConsent.set(status:"active")
+            sender.state = .on
+            store?.telemetry?.foreground()
+        }
+    }
+
+    @objc private func toggleDifficultyFeedback(_ sender: NSMenuItem) {
+        let enable = sender.state != .on
+        UserDefaults.standard.set(enable,forKey:"difficulty.feedback.enabled")
+        UserDefaults.standard.set(false,forKey:"difficulty.feedback.stopped")
+        if !enable { DifficultyFeedbackCoordinator.shared.resolvePending(reason:"disabled") }
+        sender.state = enable ? .on : .off
     }
 
     private var storageKey: String { "zip.progress.v1.\(difficulty.rawValue)" }
@@ -854,7 +892,7 @@ final class GameController: NSObject, NSApplicationDelegate {
             showSuccessPanel()
         }
     }
-    func applicationWillTerminate(_ notification: Notification) { patchesController?.flush(); saveProgress(); store?.flush(); store?.telemetry?.close() }
+    func applicationWillTerminate(_ notification: Notification) { DifficultyFeedbackCoordinator.shared.resolvePending(reason:"close"); patchesController?.flush(); saveProgress(); store?.flush(); store?.telemetry?.close() }
     func applicationDidResignActive(_ notification: Notification) {
         if !startScreen && !loading && !progress.completed && startedAt != nil { pauseGame() }
         activeGap = 0; lastStatisticsTick = Date(); saveProgress()
@@ -974,7 +1012,18 @@ final class GameController: NSObject, NSApplicationDelegate {
             self.archiveStatistics(outcome: "solved"); self.saveProgress(); self.updateLevel()
             self.successTime.stringValue = "Solved in \(self.timerLabel.stringValue)"
             self.showSuccessPanel()
-            self.difficultyToast.show(verdict: self.progress.statistics?.experiencedDifficulty, accent: self.board.accentColor)
+            DifficultyFeedbackCoordinator.shared.present(self.progress.statistics?.feedback,window:self.window,save: { [weak self] feedback in
+                guard let self else { return }
+                self.progress.statistics?.feedback = feedback
+                if let record = self.progress.statistics {
+                    if let index = self.store.snapshot.records.firstIndex(where: { $0.id == record.id }) { self.store.snapshot.records[index] = record }
+                    self.store.telemetry?.record(game:"zip",serveID:record.id,kind:"feedback"+feedback.state.capitalized,payload:feedback)
+                }
+                self.saveProgress(); self.store.flush()
+            },reveal: { [weak self] in
+                guard let self else { return }
+                self.difficultyToast.show(verdict:self.progress.statistics?.experiencedDifficulty,accent:self.board.accentColor)
+            })
         }
         for v in [windowDragArea, title, subtitle, timerLabel, progressLabel, difficultyControl, statisticsButton, board, reset, new, undo, hintButton, loadingLabel, spinner] {
             content.addSubview(v)
@@ -1146,6 +1195,7 @@ final class GameController: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     @objc private func showStatistics() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         guard !loading else { return }
         if !startScreen && !paused && !progress.completed && startedAt != nil { pauseGame() }
         difficultyToast.dismiss()
@@ -1156,6 +1206,7 @@ final class GameController: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(statisticsScreen)
     }
     private func changeDifficulty(_ selected: Int) {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         difficultyToast.dismiss()
         saveProgress()
         generationID = UUID()
@@ -1171,6 +1222,7 @@ final class GameController: NSObject, NSApplicationDelegate {
         successButton.isEnabled = !value
     }
     @objc private func newGame() {
+        DifficultyFeedbackCoordinator.shared.resolvePending(reason:"navigation")
         guard !loading && !paused else { return }
         if startScreen { beginOrResume(); return }
         saveProgress()
@@ -1198,6 +1250,7 @@ final class GameController: NSObject, NSApplicationDelegate {
                 self.progress.current = generated; self.progress.completed = false
                 self.activeGap = 0
                 self.progress.statistics = PlayStatistics(puzzle: generated, difficulty: selected)
+                self.progress.statistics?.feedback = DifficultyFeedbackCoordinator.shared.assign(serveID:self.progress.statistics!.id)
                 self.progress.statistics?.predictedEffort = model.predict(generated)
                 self.progress.statistics?.predictedDifficultyProbabilities = model.forecast(generated).probabilities
                 self.progress.statistics?.difficultyTargets = model.targets
@@ -1371,6 +1424,10 @@ if CommandLine.arguments.contains("--telemetry-crash-writer") {
     try runTelemetryJournalTests()
     try runTelemetryCrashTest()
     try runTelemetryOverflowTest()
+    runDifficultyFeedbackTests()
+    try runTelemetryRetryTests()
+    try runProgressRecoveryTests()
+    runFeedbackPresentationTests()
     runPatchesTests()
     runAdaptiveRegressionTests()
     precondition(HintPolicy.wait(active: 0, next: nil) == 30)
