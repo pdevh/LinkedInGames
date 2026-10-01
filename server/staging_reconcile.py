@@ -18,7 +18,7 @@ from server.staging_settings import state_directory, staging_dsn
 
 state = state_directory()
 dsn = staging_dsn()
-client = httpx.Client(base_url='https://localhost:8941',verify=ssl.create_default_context(cafile=str(state/'tls.crt')),timeout=30)
+client = httpx.Client(base_url='https://localhost:' + str(int(os.environ.get('TELEMETRY_STAGING_HTTPS_PORT', '8941'))),verify=ssl.create_default_context(cafile=str(state/'tls.crt')),timeout=30)
 assert client.get('/health').status_code == 200
 installations = []
 for _ in range(3):

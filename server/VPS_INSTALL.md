@@ -150,3 +150,70 @@ Its Docker/PostgreSQL 16.10 and user-systemd installation path remains unexecute
 on the actual VPS. Docker Hub rate-limited the cloud pull; a mirror was denied,
 so local tests used authoritative Debian packages with verified checksums.
 macOS builds/UI and Actions status remain unverified; GitHub API access was denied.
+
+## October 1 VPS continuation: preserved deployment and disposable checks
+
+Current working checkout: `/phil_services/linkedgames-difficulty-dev`. Both required
+handoff commits are ancestors. The older `/home/phil_user/LinkedInGames` checkout
+has local work and remains untouched. The live collector remains at
+`/phil_services/linkedgames-telemetry` on port 8942; the older staging collector
+remains on 8941. The installer now reports the unmanaged staging container during
+`--check`, before creating secrets or installing dependencies. Do not run
+`--install` to bypass that refusal.
+
+```sh
+cd /phil_services/linkedgames-difficulty-dev
+TELEMETRY_VPS_CHECKOUT="$PWD" bash server/install-vps.sh --check
+```
+
+For isolated checks without replacing the existing staging deployment, test helpers
+also accept a **newly created** database named `telemetry_test_<32 lowercase hex
+characters>` on the same loopback staging port 55439. Other database names, remote
+hosts and production port 55440 remain refused. `TELEMETRY_STAGING_RESET=1` remains
+required by destructive tests. The name guard cannot prove a database is disposable:
+never reuse a database that contains telemetry worth keeping.
+
+Create a new external state directory (0700), create a new database through the
+existing staging administrator connection, and pass its DSN only in the child
+process environment. Use `TELEMETRY_STAGING_STATE` for the new external directory
+and `TELEMETRY_STAGING_HTTPS_PORT=8943` (check that it is free first). Then run, in
+order, with those environment settings:
+
+```sh
+.venv/bin/python server/run_staging_checks.py
+.venv/bin/python server/start_staging.py
+.venv/bin/python -m server.staging_reconcile
+.venv/bin/python -m server.restore_drill
+```
+
+The restore helper uses the existing staging container's matching PostgreSQL tools
+but dumps only the explicitly selected disposable database. It drops only its own
+new temporary restore database. The synthetic source database and external dump
+remain available. Stop only the collector PID in the **new** state directory after
+checking its working directory and listener. Never stop the older staging PID.
+
+This run's retained evidence is under
+`/home/phil_user/.config/linkedgames-difficulty-check-20261001`:
+`database-name`, `reconciliation-events.jsonl`, `reconciliation-report.json`, and
+a mode-0600 local restore dump. Its external `run.py` records the exact fresh-database
+procedure, without embedding credentials. It creates a new database on every run;
+8943 must be free before starting it. No existing tables were truncated.
+
+### Client trial and rollback
+
+Build and run native self-tests on macOS before distributing the app. Sharing is
+opt-in through the application menu; turning it off stops new capture and future
+requests, while retaining queued data. An already in-flight request can finish.
+Upload is independently disabled unless `difficulty.telemetry.uploadEnabled` is
+true and `difficulty.telemetry.endpoint` is an HTTPS URL in the app's defaults.
+The menu explains that collection can remain local until upload is enabled.
+Do not enable upload for a trial until the endpoint, consent and recovery checks
+are accepted. The existing production endpoint was only health-checked here;
+its running code was not upgraded.
+
+Rollback: disable the upload preference or withdraw sharing consent; stop only a
+new isolated collector. Retain progress JSON, its `.backup`, SQLite journal/WAL,
+Keychain identity and server volumes. Feedback can be disabled separately in the
+menu. No model, effort coefficient or timing policy was changed. Production
+migration/restart and encrypted off-host backup configuration remain separate work;
+the local restore drill does not establish off-host recovery or an RPO/RTO.

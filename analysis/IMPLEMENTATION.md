@@ -1,3 +1,41 @@
+# Practical VPS continuation — 2026-10-01
+
+Scope: fewer than five users. Ship focused client recovery/retry and optional
+feedback improvements, with isolated VPS verification. The historical plan below
+is context, not a release checklist. No root cause or finished difficulty fix is
+claimed; effort coefficients and active selection/timing models are unchanged.
+
+- **Implemented:** reused the prior unfinished consent/feedback integration;
+  pre-verdict feedback gates in both games; answer/skip/stop/close handling;
+  preserve post-terminal responses during recovery; recover without Keychain;
+  reject incomplete/contradictory receipts before acknowledgments; persisted retry
+  delays including enrollment Retry-After; drain acknowledged batches promptly.
+- **Verified on this VPS:** full-history clean checkout and both required ancestors;
+  31 backend/protocol/report/isolation tests passed, no skips; PostgreSQL 16.10;
+  verified localhost TLS, 100 synthetic attempts / 300 exact event ID/hash matches,
+  3 installations, 12 requests including ignored ACKs and out-of-order delivery;
+  max receipt 0.137 seconds; local snapshot restore 0.681 seconds / 119,290 bytes.
+  Synthetic candidate fixtures do not establish native payload capacity.
+- **Preserved:** original dirty checkout, unmanaged staging container/volume and
+  listener, live central service, all unrelated services. New test source database
+  and artifacts retained outside Git. Installer --check now identifies unmanaged
+  staging before making changes. Public HTTPS /health responded ready.
+- **Native verification:** current Actions build/self-test result recorded in the
+  final handoff; includes real AppKit sheet ordering checks and recovery/retry tests.
+  Human VoiceOver/keyboard/visual acceptance remains unverified.
+- **Deferred:** new statistical models, experiments, percentage rollout, generator
+  redesign, exhaustive semantic tracing and research reporting. Existing candidate
+  observations and policy versions are reused; complete capture is not claimed.
+- **Unresolved:** encrypted off-host backup destination and restored backup;
+  production deployment of this branch; real-device complete native-pool upload,
+  401/413 network fault injection, disk-full persistence behavior and storage growth.
+  Capture errors remain logged; the queue is not a complete-trace guarantee.
+
+See `server/VPS_INSTALL.md` for the actual checkout, retained evidence, isolated
+validation steps and rollback. Default upload remains independently disabled.
+
+---
+
 # Implementation acceptance ledger
 
 ## October 1 cloud continuation: deployment handoff

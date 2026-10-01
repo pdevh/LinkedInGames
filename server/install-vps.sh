@@ -29,6 +29,11 @@ export TELEMETRY_STAGING_STATE="$state"
 
 if [[ $mode = --check ]]; then
     printf 'Prerequisites found. Target checkout: %s\nExternal state: %s\n' "$checkout" "$state"
+    if docker container inspect "$container" >/dev/null 2>&1; then
+        [[ $(docker inspect -f '{{index .Config.Labels "linkedgames.scope"}}' "$container") = staging ]] || fail 'Existing staging container is unmanaged. Preserve it; use a disposable test database and a separate localhost HTTPS port (see VPS_INSTALL.md).'
+    elif docker volume inspect "$volume" >/dev/null 2>&1; then
+        fail 'Existing staging volume requires manual review; no data changed.'
+    fi
     printf 'Staging only: PostgreSQL 127.0.0.1:55439; HTTPS 127.0.0.1:8941. No VPS changes made.\n'
     exit 0
 fi

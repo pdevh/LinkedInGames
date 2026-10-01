@@ -1,5 +1,6 @@
 """Explicit isolated test settings; credentials never appear in diagnostics."""
 import os
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -31,5 +32,5 @@ def require_isolated(dsn):
     settings = conninfo_to_dict(dsn)
     if (settings.get('host') not in ('localhost', '127.0.0.1', '::1')
             or settings.get('port') != '55439'
-            or settings.get('dbname') != 'telemetry'):
+            or not (settings.get('dbname') == 'telemetry' or re.fullmatch(r'telemetry_test_[0-9a-f]{32}', settings.get('dbname', '')))):
         raise RuntimeError('Refusing destructive tests outside loopback staging port 55439/database telemetry')
