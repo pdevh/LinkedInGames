@@ -61,6 +61,9 @@ def health():
             settings = db.execute('SELECT current_setting(\'fsync\'),current_setting(\'synchronous_commit\')').fetchone()
             if settings != ('on', 'on'):
                 raise HTTPException(503, 'durabilityConfiguration')
+            versions = {row[0] for row in db.execute('SELECT version FROM schema_migrations')}
+            if not {1, 2} <= versions:
+                raise HTTPException(503, 'migrationsRequired', headers={'Retry-After': '5'})
         return {'status': 'ready', 'schemaVersion': 1}
     except psycopg.Error:
         raise HTTPException(503, 'database', headers={'Retry-After': '5'})
@@ -117,10 +120,13 @@ async def rotate(request: Request):
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, 'installationID')
     token = secrets.token_urlsafe(32)
-    with connect() as db:
-        db.execute('SELECT id FROM installations WHERE id=%s FOR UPDATE', (installation,))
-        authenticate(db,request,installation)
-        db.execute('UPDATE installations SET credential_hash=%s WHERE id=%s',(digest(token),installation))
+    try:
+        with connect() as db:
+            db.execute('SELECT id FROM installations WHERE id=%s FOR UPDATE', (installation,))
+            authenticate(db,request,installation)
+            db.execute('UPDATE installations SET credential_hash=%s WHERE id=%s',(digest(token),installation))
+    except psycopg.Error:
+        raise HTTPException(503, 'database', headers={'Retry-After': '5'})
     return {'credential':token}
 
 
@@ -130,7 +136,7 @@ async def ingest(request: Request):
     try:
         installation, batch = uuid(data['installationID']), uuid(data['batchID'])
         entries = data['events']
-        if data['schemaVersion'] != 1:
+        if type(data['schemaVersion']) is not int or data['schemaVersion'] != 1:
             raise HTTPException(422, 'unknownSchema')
         if not isinstance(entries,list) or not 1 <= len(entries) <= 500:
             raise HTTPException(413, 'eventCount')
