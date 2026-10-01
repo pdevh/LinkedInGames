@@ -1162,7 +1162,8 @@ final class GameController: NSObject, NSApplicationDelegate {
         showHome()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if !preview && TelemetryConsent.supplied?.status != "declined" &&
+        if !["--preview-patches", "--smoke-games", "--smoke-play"].contains(where: CommandLine.arguments.contains) &&
+            TelemetryConsent.supplied?.status != "declined" &&
             TelemetryConsent.supplied?.version != TelemetryConsent.currentVersion {
             DispatchQueue.main.async { [weak self] in self?.offerTelemetryConsent() }
         }
