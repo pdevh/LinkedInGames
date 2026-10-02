@@ -1,0 +1,16 @@
+[Unit]
+Description=LinkedInGames SSH-only telemetry dashboard
+After=network-online.target
+
+[Service]
+WorkingDirectory=/phil_services/linkedgames-difficulty-dev
+EnvironmentFile=/home/phil_user/.config/linkedgames-telemetry-central/telemetry_report.env
+ExecStart=/phil_services/linkedgames-difficulty-dev/.venv/bin/python -m uvicorn server.dashboard:app --host 127.0.0.1 --port 8944 --no-access-log --no-proxy-headers
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
